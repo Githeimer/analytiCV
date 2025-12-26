@@ -39,13 +39,13 @@ uvicorn api:app --reload
 Server runs on `http://localhost:8000`
 
 **Endpoints:**
-- `POST /api/parse-resume` - Upload PDF and get analysis
+- `POST /api/analyzer` - Upload PDF and get analysis
 - `GET /docs` - Interactive API documentation (Swagger UI)
 - `GET /health` - Health check
 
 **Example using curl:**
 ```bash
-curl -X POST "http://localhost:8000/api/parse-resume" \
+curl -X POST "http://localhost:8000/api/analyzer" \
   -F "file=@resume.pdf"
 ```
 

@@ -58,8 +58,8 @@ def is_resume_pdf(file_path: str) -> bool:
     except:
         return False
 
-@app.post("/api/parse-resume")
-async def parse_resume(file: UploadFile = File(...)):
+@app.post("/api/analyzer")
+async def analyze_resume(file: UploadFile = File(...)):
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
     
