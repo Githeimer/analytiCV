@@ -16,7 +16,7 @@ export async function POST(request: NextRequest) {
     const backendFormData = new FormData();
     backendFormData.append('file', file);
 
-    const response = await fetch('http://localhost:8000/api/parse-resume', {
+    const response = await fetch('http://localhost:8000/api/analyzer', {
       method: 'POST',
       body: backendFormData,
     });

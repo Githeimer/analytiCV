@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 
-export default function ParseResumePage() {
+export default function AnalyzerPage() {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
@@ -32,7 +32,7 @@ export default function ParseResumePage() {
       const formData = new FormData();
       formData.append('file', file);
 
-      const response = await fetch('/api/parse-resume', {
+      const response = await fetch('/api/analyzer', {
         method: 'POST',
         body: formData,
       });
