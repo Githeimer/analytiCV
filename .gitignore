@@ -1,0 +1,59 @@
+# Python
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+.env.local
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+resume_db/
+
+# Logs
+*.log
+logs/
+/tmp/
+
+# PDF test files
+ai/*.pdf
+!ai/requirements.txt
+
+# Temporary files
+*.tmp
+sample_resume.html
+
+# Test files
+*.pdf
+*.json
+test_text.txt
+ai/text_analyzer.py
+
+text_analyzer.py
