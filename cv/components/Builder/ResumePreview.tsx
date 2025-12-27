@@ -1,3 +1,5 @@
+'use client';
+
 interface ResumePreviewProps {
   html: string;
   isGenerating: boolean;

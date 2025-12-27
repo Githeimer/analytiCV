@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import PersonalInfoForm from './PersonalInfoForm';
 import SummaryForm from './SummaryForm';
 import ExperienceForm from './ExperienceForm';
@@ -54,6 +54,15 @@ export default function ResumeForm({ setPreviewHtml, setIsGenerating }: ResumeFo
 
   const [errors, setErrors] = useState<Record<string, any>>({});
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Auto-refresh preview when form changes
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      handlePreview(true);
+    }, 2000); // Wait 2 seconds after user stops typing
+
+    return () => clearTimeout(timer);
+  }, [formData]);
 
   const validateForm = (): boolean => {
     const newErrors: Record<string, any> = {};
@@ -136,25 +145,26 @@ export default function ResumeForm({ setPreviewHtml, setIsGenerating }: ResumeFo
     };
   };
 
-  const handlePreview = async () => {
-    if (!validateForm()) {
-      setMessage({ type: 'error', text: 'Please fix the validation errors before previewing.' });
-      return;
-    }
-
+  const handlePreview = async (silent = false) => {
     setIsGenerating(true);
-    setMessage(null);
+    if (!silent) {
+      setMessage(null);
+    }
 
     try {
       const cleanedData = cleanFormData(formData);
       const html = await buildResume(cleanedData);
       setPreviewHtml(html);
-      setMessage({ type: 'success', text: 'Preview generated successfully!' });
+      if (!silent) {
+        setMessage({ type: 'success', text: 'Preview generated successfully!' });
+      }
     } catch (error) {
-      setMessage({ 
-        type: 'error', 
-        text: error instanceof Error ? error.message : 'Failed to generate preview' 
-      });
+      if (!silent) {
+        setMessage({ 
+          type: 'error', 
+          text: error instanceof Error ? error.message : 'Failed to generate preview' 
+        });
+      }
     } finally {
       setIsGenerating(false);
     }
@@ -199,7 +209,7 @@ export default function ResumeForm({ setPreviewHtml, setIsGenerating }: ResumeFo
       <div className="flex gap-4 sticky top-0 bg-white z-10 py-4 border-b">
         <button
           type="button"
-          onClick={handlePreview}
+          onClick={() => handlePreview(false)}
           className="flex-1 px-6 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition shadow-sm"
         >
           Preview Resume
@@ -257,7 +267,7 @@ export default function ResumeForm({ setPreviewHtml, setIsGenerating }: ResumeFo
       <div className="flex gap-4 pt-4 border-t">
         <button
           type="button"
-          onClick={handlePreview}
+          onClick={() => handlePreview(false)}
           className="flex-1 px-6 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition shadow-sm"
         >
           Preview Resume
