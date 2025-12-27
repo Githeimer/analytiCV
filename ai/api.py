@@ -12,7 +12,6 @@ from pathlib import Path
 
 # Add the ai directory to Python path
 sys.path.insert(0, str(Path(__file__).parent))
-
 from resume_parser import ResumeParser
 from resume_builder import ResumeBuilder
 from pdf_generator import PDFGenerator
@@ -174,6 +173,7 @@ async def build_resume(resume_data: ResumeDataModel):
     """Build HTML resume from structured data"""
     try:
         data_dict = resume_data.model_dump()
+        print(f"DEBUG: Received data: {json.dumps(data_dict, indent=2)}")
         json_data = json.dumps(data_dict)
         html = resume_builder.build_from_json(json_data)
         return {"success": True, "html": html}
