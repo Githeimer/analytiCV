@@ -103,7 +103,7 @@ async def health():
 async def get_templates():
     """Get list of available resume templates"""
     try:
-        templates_dir = Path(__file__).parent.parent / "templates"
+        templates_dir = Path(__file__).parent / "templates"
         templates = []
         
         for template_path in templates_dir.iterdir():
@@ -201,7 +201,7 @@ async def build_resume(resume_data: ResumeDataModel):
             data_dict['professional_summary'] = data_dict.pop('summary')
         
         # Load template
-        templates_dir = Path(__file__).parent.parent / "templates" / template_name
+        templates_dir = Path(__file__).parent / "templates" / template_name
         template_file = templates_dir / "template.html"
         
         if not template_file.exists():
@@ -240,7 +240,7 @@ async def generate_pdf(resume_data: ResumeDataModel):
             data_dict['professional_summary'] = data_dict.pop('summary')
         
         # Load template
-        templates_dir = Path(__file__).parent.parent / "templates" / template_name
+        templates_dir = Path(__file__).parent / "templates" / template_name
         template_file = templates_dir / "template.html"
         
         if not template_file.exists():

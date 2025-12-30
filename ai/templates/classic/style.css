@@ -1,0 +1,218 @@
+/* Classic Resume Template Styles */
+@import url('https://fonts.googleapis.com/css2?family=Georgia&display=swap');
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+@page {
+  size: letter;
+  margin: 0.5in;
+}
+
+body {
+  font-family: Georgia, serif;
+  color: #2c3e50;
+  line-height: 1.6;
+  font-size: 11pt;
+}
+
+.resume-container {
+  max-width: 7.5in;
+  margin: 0 auto;
+  background: white;
+}
+
+/* Header */
+.header {
+  text-align: center;
+  border-bottom: 3px solid #2c3e50;
+  padding-bottom: 15px;
+  margin-bottom: 25px;
+}
+
+.header h1 {
+  font-size: 32pt;
+  font-weight: 400;
+  margin-bottom: 8px;
+  color: #1a1a1a;
+  letter-spacing: 1px;
+}
+
+.header .title {
+  font-size: 13pt;
+  color: #555555;
+  font-style: italic;
+  margin-bottom: 12px;
+}
+
+.contact-info {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 15px;
+  font-size: 10pt;
+  color: #555555;
+  font-variant-numeric: lining-nums;
+}
+
+.contact-info a {
+  color: #555555;
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+
+.contact-info a:hover {
+  border-bottom-color: #2c3e50;
+}
+
+.contact-item {
+  display: flex;
+  align-items: center;
+}
+
+.contact-item::after {
+  content: "•";
+  margin-left: 15px;
+}
+
+.contact-item:last-child::after {
+  content: "";
+  margin: 0;
+}
+
+/* Sections */
+.section {
+  margin-bottom: 25px;
+  page-break-inside: avoid;
+}
+
+.section-title {
+  font-size: 14pt;
+  font-weight: 700;
+  color: #1a1a1a;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  border-bottom: 2px solid #2c3e50;
+  padding-bottom: 5px;
+  margin-bottom: 15px;
+}
+
+.summary {
+  font-size: 11pt;
+  line-height: 1.7;
+  color: #2c3e50;
+  text-align: justify;
+  margin-bottom: 5px;
+}
+
+/* Experience & Education */
+.experience-item,
+.education-item,
+.project-item {
+  margin-bottom: 18px;
+  page-break-inside: avoid;
+}
+
+.item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 5px;
+}
+
+.item-title {
+  font-size: 12pt;
+  font-weight: 700;
+  color: #1a1a1a;
+}
+
+.item-subtitle {
+  font-size: 11pt;
+  color: #555555;
+  font-style: italic;
+  margin-bottom: 3px;
+}
+
+.item-date {
+  font-size: 10pt;
+  color: #555555;
+  font-style: italic;
+}
+
+.item-location {
+  font-size: 10pt;
+  color: #555555;
+  font-style: italic;
+}
+
+.highlights,
+.project-highlights {
+  list-style: disc;
+  margin-left: 25px;
+  margin-top: 8px;
+}
+
+.highlights li,
+.project-highlights li {
+  margin-bottom: 6px;
+  font-size: 10.5pt;
+  color: #2c3e50;
+  line-height: 1.5;
+}
+
+/* Skills */
+.skills-container {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.skill-category {
+  margin-bottom: 12px;
+}
+
+.skill-category-title {
+  font-size: 11pt;
+  font-weight: 700;
+  color: #1a1a1a;
+  margin-bottom: 5px;
+}
+
+.skills-list {
+  font-size: 10pt;
+  color: #555555;
+  line-height: 1.5;
+}
+
+/* Projects */
+.technologies {
+  font-size: 10pt;
+  color: #555555;
+  font-style: italic;
+  margin-top: 5px;
+}
+
+/* Certifications */
+.certifications-list {
+  list-style: none;
+  margin-left: 0;
+}
+
+.certification-item {
+  margin-bottom: 8px;
+  font-size: 10.5pt;
+  color: #2c3e50;
+  position: relative;
+  padding-left: 20px;
+}
+
+.certification-item:before {
+  content: "•";
+  position: absolute;
+  left: 5px;
+  color: #2c3e50;
+  font-weight: bold;
+}
