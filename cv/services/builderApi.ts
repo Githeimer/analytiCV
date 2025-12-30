@@ -5,7 +5,10 @@ export async function buildResume(data: any): Promise<string> {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        ...data,
+        template: data.template || 'modern', // Include template, default to 'modern'
+      }),
     });
 
     if (!response.ok) {
@@ -30,7 +33,10 @@ export async function downloadPDF(data: any): Promise<void> {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        ...data,
+        template: data.template || 'modern', // Include template, default to 'modern'
+      }),
     });
 
     if (!response.ok) {

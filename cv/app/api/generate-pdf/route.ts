@@ -3,9 +3,6 @@ import { NextRequest, NextResponse } from 'next/server';
 export async function POST(request: NextRequest) {
   try {
     const data = await request.json();
-    
-    console.log('=== Sending PDF request to backend ===');
-    console.log(JSON.stringify(data, null, 2));
 
     // Forward the data to the backend API
     const response = await fetch('http://localhost:8000/api/generate-pdf', {
@@ -18,9 +15,6 @@ export async function POST(request: NextRequest) {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('=== Backend PDF error response ===');
-      console.error('Status:', response.status);
-      console.error('Response:', errorText);
       
       return NextResponse.json(
         { error: 'Failed to generate PDF', details: errorText },

@@ -8,9 +8,12 @@ import EducationForm from './EducationForm';
 import SkillsForm from './SkillsForm';
 import ProjectsForm from './ProjectsForm';
 import CertificationsForm from './CertificationsForm';
+import TemplateSelector from './TemplateSelector';
 import { buildResume, downloadPDF } from '@/services/builderApi';
+import { processPersonalInfoForBackend } from '@/utils/socialLinks';
 
 interface ResumeData {
+  template?: string;
   personal_info: {
     name: string;
     email: string;
@@ -34,7 +37,16 @@ interface ResumeFormProps {
 }
 
 export default function ResumeForm({ setPreviewHtml, setIsGenerating }: ResumeFormProps) {
+  // Load template from localStorage or default to 'modern'
+  const [selectedTemplate, setSelectedTemplate] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('resumeTemplate') || 'modern';
+    }
+    return 'modern';
+  });
+
   const [formData, setFormData] = useState<ResumeData>({
+    template: selectedTemplate,
     personal_info: {
       name: '',
       email: '',
@@ -54,6 +66,14 @@ export default function ResumeForm({ setPreviewHtml, setIsGenerating }: ResumeFo
 
   const [errors, setErrors] = useState<Record<string, any>>({});
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Sync template changes with formData and localStorage
+  useEffect(() => {
+    setFormData(prev => ({ ...prev, template: selectedTemplate }));
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('resumeTemplate', selectedTemplate);
+    }
+  }, [selectedTemplate]);
 
   // Auto-refresh preview when form changes
   useEffect(() => {
@@ -124,6 +144,7 @@ export default function ResumeForm({ setPreviewHtml, setIsGenerating }: ResumeFo
     // Remove empty strings from arrays and filter out empty objects
     return {
       ...data,
+      personal_info: processPersonalInfoForBackend(data.personal_info),
       experience: data.experience.map(exp => ({
         ...exp,
         highlights: exp.highlights.filter((h: string) => h.trim() !== ''),
@@ -222,6 +243,12 @@ export default function ResumeForm({ setPreviewHtml, setIsGenerating }: ResumeFo
           Download PDF
         </button>
       </div>
+
+      {/* Template Selector */}
+      <TemplateSelector
+        selectedTemplate={selectedTemplate}
+        onSelect={setSelectedTemplate}
+      />
 
       {/* Form Sections */}
       <PersonalInfoForm

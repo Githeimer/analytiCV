@@ -87,28 +87,30 @@ export default function PersonalInfoForm({ data, onChange, errors }: PersonalInf
 
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
-            LinkedIn
+            LinkedIn Username
           </label>
           <input
-            type="url"
+            type="text"
             value={data.linkedin}
             onChange={(e) => handleChange('linkedin', e.target.value)}
             className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-            placeholder="https://linkedin.com/in/johndoe"
+            placeholder="johndoe"
           />
+          <p className="text-xs text-gray-500 mt-1">linkedin.com/in/{data.linkedin || 'username'}</p>
         </div>
 
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
-            GitHub
+            GitHub Username
           </label>
           <input
-            type="url"
+            type="text"
             value={data.github}
             onChange={(e) => handleChange('github', e.target.value)}
             className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-            placeholder="https://github.com/johndoe"
+            placeholder="johndoe"
           />
+          <p className="text-xs text-gray-500 mt-1">github.com/{data.github || 'username'}</p>
         </div>
 
         <div className="md:col-span-2">

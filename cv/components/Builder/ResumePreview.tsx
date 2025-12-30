@@ -24,7 +24,7 @@ export default function ResumePreview({ html, isGenerating }: ResumePreviewProps
               srcDoc={html}
               className="w-full min-h-[700px] border-0"
               title="Resume Preview"
-              sandbox="allow-same-origin"
+              sandbox="allow-same-origin allow-scripts"
             />
           </div>
         ) : (
