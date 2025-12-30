@@ -99,6 +99,26 @@ async def root():
 async def health():
     return {"status": "healthy"}
 
+@app.get("/api/templates")
+async def get_templates():
+    """Get list of available resume templates"""
+    try:
+        templates_dir = Path(__file__).parent.parent / "templates"
+        templates = []
+        
+        for template_path in templates_dir.iterdir():
+            if template_path.is_dir() and template_path.name != "assets":
+                config_file = template_path / "config.json"
+                if config_file.exists():
+                    with open(config_file, 'r') as f:
+                        config = json.load(f)
+                        config['id'] = template_path.name
+                        templates.append(config)
+        
+        return {"success": True, "templates": templates}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error loading templates: {str(e)}")
+
 # Pydantic models for resume builder
 class PersonalInfoModel(BaseModel):
     name: str
@@ -140,6 +160,7 @@ class ResumeDataModel(BaseModel):
     education: List[EducationModel] = Field(default_factory=list)
     projects: List[ProjectModel] = Field(default_factory=list)
     certifications: List[str] = Field(default_factory=list)
+    template: Optional[str] = "modern"
     
     @model_validator(mode='before')
     @classmethod
@@ -173,14 +194,35 @@ async def build_resume(resume_data: ResumeDataModel):
     """Build HTML resume from structured data"""
     try:
         data_dict = resume_data.model_dump()
-        print(f"DEBUG: Received data: {json.dumps(data_dict, indent=2)}")
-        json_data = json.dumps(data_dict)
-        html = resume_builder.build_from_json(json_data)
+        template_name = data_dict.pop('template', 'modern')
+        
+        # Map 'summary' to 'professional_summary' for templates
+        if 'summary' in data_dict:
+            data_dict['professional_summary'] = data_dict.pop('summary')
+        
+        # Load template
+        templates_dir = Path(__file__).parent.parent / "templates" / template_name
+        template_file = templates_dir / "template.html"
+        
+        if not template_file.exists():
+            raise HTTPException(status_code=404, detail=f"Template '{template_name}' not found")
+        
+        # Use the template-based builder
+        from jinja2 import Template
+        with open(template_file, 'r') as f:
+            template = Template(f.read())
+        
+        html = template.render(**data_dict)
+        
+        # Inject CSS into HTML
+        css_file = templates_dir / "style.css"
+        if css_file.exists():
+            with open(css_file, 'r') as f:
+                css_content = f.read()
+            html = html.replace('</head>', f'<style>{css_content}</style></head>')
+        
         return {"success": True, "html": html}
     except Exception as e:
-        import traceback
-        print(f"ERROR: {e}")
-        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/generate-pdf")
@@ -189,17 +231,45 @@ async def generate_pdf(resume_data: ResumeDataModel):
     if not pdf_generator.available:
         raise HTTPException(status_code=503, detail="WeasyPrint not installed")
     
-    data_dict = resume_data.model_dump()
-    json_data = json.dumps(data_dict)
-    html = resume_builder.build_from_json(json_data)
-    pdf_bytes = pdf_generator.get_pdf_bytes(html)
-    filename = f"{resume_data.personal_info.name.replace(' ', '_')}_Resume.pdf"
-    
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
-    )
+    try:
+        data_dict = resume_data.model_dump()
+        template_name = data_dict.pop('template', 'modern')
+        
+        # Map 'summary' to 'professional_summary' for templates
+        if 'summary' in data_dict:
+            data_dict['professional_summary'] = data_dict.pop('summary')
+        
+        # Load template
+        templates_dir = Path(__file__).parent.parent / "templates" / template_name
+        template_file = templates_dir / "template.html"
+        
+        if not template_file.exists():
+            raise HTTPException(status_code=404, detail=f"Template '{template_name}' not found")
+        
+        # Render template
+        from jinja2 import Template
+        with open(template_file, 'r') as f:
+            template = Template(f.read())
+        
+        html = template.render(**data_dict)
+        
+        # Inject CSS into HTML
+        css_file = templates_dir / "style.css"
+        if css_file.exists():
+            with open(css_file, 'r') as f:
+                css_content = f.read()
+            html = html.replace('</head>', f'<style>{css_content}</style></head>')
+        
+        pdf_bytes = pdf_generator.get_pdf_bytes(html)
+        filename = f"{resume_data.personal_info.name.replace(' ', '_')}_Resume.pdf"
+        
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
