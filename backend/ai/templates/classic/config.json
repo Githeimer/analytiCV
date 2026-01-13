@@ -1,0 +1,24 @@
+{
+  "name": "Classic",
+  "description": "Traditional professional resume with a timeless serif design",
+  "version": "1.0.0",
+  "colors": {
+    "primary": "#1a1a1a",
+    "secondary": "#555555",
+    "accent": "#2c3e50",
+    "text": "#2c3e50",
+    "background": "#ffffff",
+    "light": "#f8f9fa"
+  },
+  "fonts": {
+    "heading": "Georgia, serif",
+    "body": "Georgia, serif"
+  },
+  "preview_image": "preview.png",
+  "features": [
+    "Single-column layout",
+    "Serif typography",
+    "Traditional formatting",
+    "Clean and professional"
+  ]
+}

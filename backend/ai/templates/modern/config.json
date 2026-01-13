@@ -1,0 +1,24 @@
+{
+  "name": "Modern",
+  "description": "A clean, contemporary design with bold typography and subtle color accents",
+  "version": "1.0.0",
+  "colors": {
+    "primary": "#2563eb",
+    "secondary": "#64748b",
+    "accent": "#3b82f6",
+    "text": "#1e293b",
+    "background": "#ffffff",
+    "light": "#f1f5f9"
+  },
+  "fonts": {
+    "heading": "Inter, sans-serif",
+    "body": "Inter, sans-serif"
+  },
+  "preview_image": "preview.png",
+  "features": [
+    "Two-column layout",
+    "Icon integration",
+    "Skills progress bars",
+    "Modern color scheme"
+  ]
+}
