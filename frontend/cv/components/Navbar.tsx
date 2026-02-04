@@ -13,6 +13,7 @@ const Navbar = () => {
         <div className="font-comfortaa flex flex-row gap-5 items-center cursor-pointer ">
           <Link href="/builder">builder</Link>
           <Link href="/analyzer">analyzer</Link>
+          <Link href="/editor">editor</Link>
           <div>
             features
           </div>
