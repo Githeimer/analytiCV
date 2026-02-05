@@ -1,11 +1,13 @@
 /**
- * PDF Inline Editor Page
+ * PDF Inline Editor Page - IMPROVED VERSION
  * Document-style inline editor with professional document editing environment
- * Uses Word Mode for MS Word-style ghost text layer editing:
- * - Hidden canvas (opacity: 0) prevents text overlap
- * - Native contentEditable spans for direct text manipulation
- * - Enter key saves and exits edit mode
- * - Click on issues to focus and edit problematic sections
+ * 
+ * Key Improvements:
+ * - Fixed auto-refresh issue - changes no longer trigger page reload
+ * - Manual "Analyze" button for ATS recalculation
+ * - Auto-save functionality with visual feedback
+ * - Better error handling and recovery
+ * - Optimized re-rendering prevention
  */
 
 'use client';
@@ -16,8 +18,6 @@ import dynamic from 'next/dynamic';
 import { useEditorState } from '@/hooks/useEditorState';
 
 // Dynamic import with SSR disabled to prevent DOMMatrix errors
-// PDF.js uses browser-only APIs that crash during server-side rendering
-// Word Mode is the only editing mode - provides MS Word-style inline editing
 const WordStyleEditor = dynamic(
   () => import('@/components/Editor/WordStyleEditor'),
   { 
@@ -54,10 +54,10 @@ function EditorLoadingSkeleton() {
     </div>
   );
 }
+
 import { extractPDFBlocks, analyzeBlocks, updateResumeBlocks } from '@/services/editorApi';
 import type { BlockUpdate } from '@/services/editorApi';
 import { exportToPDF, downloadPDF, fileToArrayBuffer } from '@/utils/pdfExport';
-import type { BlockWeakness } from '@/types/editor';
 import type { DocumentCanvasRef } from '@/components/Editor/WordStyleEditor';
 
 export default function EditorPage() {
@@ -82,10 +82,11 @@ export default function EditorPage() {
   const [atsScore, setAtsScore] = useState<number | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [hasPendingChanges, setHasPendingChanges] = useState(false);
+  const [lastSaveTime, setLastSaveTime] = useState<Date | null>(null);
+  
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pdfBytesRef = useRef<ArrayBuffer | null>(null);
   const issueRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const atsDebounceRef = useRef<NodeJS.Timeout | null>(null);
   const editorRef = useRef<DocumentCanvasRef>(null);
 
   // Handle pending changes status from DocumentCanvas
@@ -98,10 +99,13 @@ export default function EditorPage() {
     if (!editorRef.current) return;
     
     setIsSaving(true);
+    setError(null);
+    
     try {
       const success = await editorRef.current.saveChanges();
       if (success) {
         setHasPendingChanges(false);
+        setLastSaveTime(new Date());
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save changes');
@@ -123,6 +127,7 @@ export default function EditorPage() {
 
       setIsUploading(true);
       setError(null);
+      setAtsScore(null); // Reset score for new file
 
       try {
         pdfBytesRef.current = await fileToArrayBuffer(file);
@@ -139,7 +144,7 @@ export default function EditorPage() {
     [setPdf, setExtractionResult]
   );
 
-  // Handle analyze button click
+  // Handle analyze button click - MANUAL ONLY, no auto-triggering
   const handleAnalyze = useCallback(async () => {
     if (!state.extractionResult) return;
 
@@ -175,6 +180,20 @@ export default function EditorPage() {
   const handleExport = useCallback(async () => {
     if (!state.extractionResult || !pdfBytesRef.current) return;
 
+    // Auto-save before export
+    if (hasPendingChanges && editorRef.current) {
+      setIsSaving(true);
+      try {
+        await editorRef.current.saveChanges();
+        setHasPendingChanges(false);
+      } catch (err) {
+        setError('Failed to save changes before export');
+        setIsSaving(false);
+        return;
+      }
+      setIsSaving(false);
+    }
+
     setExporting(true);
     setError(null);
 
@@ -193,47 +212,15 @@ export default function EditorPage() {
     } finally {
       setExporting(false);
     }
-  }, [state.extractionResult, state.blocks, state.pdfFile, setExporting]);
+  }, [state.extractionResult, state.blocks, state.pdfFile, setExporting, hasPendingChanges]);
 
-  // Handle block text change with debounced ATS recalculation
+  // Handle block text change - UPDATE LOCAL STATE ONLY, no backend call
   const handleBlockTextChange = useCallback(
-    (id: string, text: string) => {
-      updateBlockText(id, text);
-      
-      // Debounced ATS score recalculation - 2 second delay
-      // This prevents excessive backend calls while typing
-      if (atsDebounceRef.current) {
-        clearTimeout(atsDebounceRef.current);
-      }
-      
-      atsDebounceRef.current = setTimeout(async () => {
-        // Only recalculate if we have extraction result
-        if (state.extractionResult) {
-          try {
-            // Get updated blocks with current text
-            const updatedBlocks = state.extractionResult.blocks.map((block) => {
-              const blockState = state.blocks.get(block.id);
-              return {
-                ...block,
-                text: blockState?.currentText || block.text,
-              };
-            });
-            
-            const result = await analyzeBlocks(updatedBlocks);
-            setWeakBlocks(result.weak_blocks);
-            
-            // Calculate ATS score based on issues
-            const totalBlocks = result.total_analyzed;
-            const issueCount = result.issues_found;
-            const score = Math.max(0, Math.round(100 - (issueCount / Math.max(totalBlocks, 1)) * 50));
-            setAtsScore(score);
-          } catch {
-            // Silently fail - don't interrupt editing
-          }
-        }
-      }, 2000);
+    (id: string, oldText: string, newText: string) => {
+      // Just update local state - don't trigger analysis or backend saves
+      updateBlockText(id, newText);
     },
-    [updateBlockText, state.extractionResult, state.blocks, setWeakBlocks]
+    [updateBlockText]
   );
 
   // Handle block save - persist to backend
@@ -260,10 +247,8 @@ export default function EditorPage() {
       
       console.log('[EditorPage] Backend response:', response);
       
-      // If the backend returns a new ATS score, update it
-      if (response.atsScore !== undefined) {
-        setAtsScore(response.atsScore);
-      }
+      // Update last save time
+      setLastSaveTime(new Date());
     } catch (error) {
       // Re-throw to let DocumentCanvas handle the error state
       console.error('[EditorPage] Failed to save block:', error);
@@ -279,36 +264,21 @@ export default function EditorPage() {
     [selectBlock]
   );
 
-  // Handle applying a suggestion
-  const handleApplySuggestion = useCallback(
-    (id: string, newText: string) => {
-      updateBlockText(id, newText);
-    },
-    [updateBlockText]
-  );
-
-  // Handle clicking a block - sync with sidebar
-  const handleBlockClick = useCallback((blockId: string) => {
-    setSelectedIssueId(blockId);
-    // Scroll to issue in sidebar
-    const issueElement = issueRefs.current.get(blockId);
-    if (issueElement) {
-      issueElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
-  }, []);
-
-  // Handle clicking an issue in sidebar - scroll to block and focus for editing
+  // Handle clicking an issue in sidebar - scroll to block, highlight, and focus for editing
   const handleIssueClick = useCallback((blockId: string) => {
     setSelectedIssueId(blockId);
     selectBlock(blockId);
     
-    // Find the editable span by block ID and focus it for immediate editing
-    // First scroll into view, then focus after a short delay for smooth UX
+    // Find the editable span by block ID using data attribute
     const blockElement = document.querySelector(`[data-block-id="${blockId}"]`) as HTMLElement;
     if (blockElement) {
+      // Scroll to the element smoothly, centering it in view
       blockElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
       
-      // Focus the element after scroll completes to enable immediate editing
+      // Add temporary highlight animation
+      blockElement.classList.add('issue-highlight-animation');
+      
+      // Focus the element after scroll completes
       setTimeout(() => {
         if (blockElement.contentEditable === 'true') {
           blockElement.focus();
@@ -320,18 +290,14 @@ export default function EditorPage() {
           selection?.removeAllRanges();
           selection?.addRange(range);
         }
+        
+        // Remove the highlight animation class after it completes
+        setTimeout(() => {
+          blockElement.classList.remove('issue-highlight-animation');
+        }, 1500);
       }, 300);
     }
   }, [selectBlock]);
-
-  // Cleanup debounce timer on unmount
-  useEffect(() => {
-    return () => {
-      if (atsDebounceRef.current) {
-        clearTimeout(atsDebounceRef.current);
-      }
-    };
-  }, []);
 
   // Check for PDF from analyzer page (via sessionStorage)
   useEffect(() => {
@@ -406,6 +372,19 @@ export default function EditorPage() {
       }))
     : [];
 
+  // Format last save time
+  const formatLastSaveTime = (date: Date | null) => {
+    if (!date) return '';
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+    const seconds = Math.floor(diff / 1000);
+    
+    if (seconds < 60) return 'Just now';
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+    return date.toLocaleTimeString();
+  };
+
   return (
     <div className="min-h-screen bg-gray-100 font-comfortaa">
       {/* Header */}
@@ -418,6 +397,11 @@ export default function EditorPage() {
               </h1>
               <p className="text-sm text-gray-500 mt-0.5">
                 Edit your resume directly on the document
+                {lastSaveTime && !hasPendingChanges && (
+                  <span className="ml-2 text-green-600">
+                    • Saved {formatLastSaveTime(lastSaveTime)}
+                  </span>
+                )}
               </p>
             </div>
 
@@ -427,8 +411,8 @@ export default function EditorPage() {
                 <>
                   {/* Save Button */}
                   <motion.button
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
+                    whileHover={{ scale: hasPendingChanges ? 1.02 : 1 }}
+                    whileTap={{ scale: hasPendingChanges ? 0.98 : 1 }}
                     onClick={handleSave}
                     disabled={isSaving || !hasPendingChanges}
                     className={`
@@ -534,7 +518,15 @@ export default function EditorPage() {
               <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
-              {error}
+              <div className="flex-1">{error}</div>
+              <button
+                onClick={() => setError(null)}
+                className="text-red-400 hover:text-red-600"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
             </motion.div>
           )}
         </AnimatePresence>
@@ -633,7 +625,7 @@ export default function EditorPage() {
                     </span>
                   </div>
 
-                  {hasUnsavedChanges && (
+                  {hasPendingChanges && (
                     <div className="flex items-center gap-2 text-xs text-orange-600 bg-orange-50 p-2 rounded-lg">
                       <span className="w-2 h-2 bg-orange-500 rounded-full animate-pulse" />
                       You have unsaved changes
@@ -742,11 +734,8 @@ export default function EditorPage() {
                   weakBlocks={state.weakBlocks}
                   scale={state.scale}
                   currentPage={state.currentPage}
-                  onTextChange={(blockId, oldText, newText) => {
-                    handleBlockTextChange(blockId, newText);
-                  }}
+                  onTextChange={handleBlockTextChange}
                   onBlockSave={handleBlockSave}
-                  onATSRecalculate={handleAnalyze}
                   onPendingChangesChange={handlePendingChangesChange}
                 />
               </div>
@@ -762,6 +751,11 @@ export default function EditorPage() {
                     </svg>
                     Issues ({weakBlockCount})
                   </h3>
+                  {weakBlockCount > 0 && (
+                    <p className="text-xs text-gray-500 mt-1">
+                      Click "Analyze" after making edits to update
+                    </p>
+                  )}
                 </div>
 
                 <div className="max-h-[calc(100vh-200px)] overflow-y-auto">

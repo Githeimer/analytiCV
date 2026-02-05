@@ -62,23 +62,31 @@
   padding: 0 1px;
   margin: 0;
   background: transparent;
-  border-radius: 2px;
-  transition: background-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
+  border-radius: 0;
+  transition: color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
   /* Ensure text is selectable and clickable */
   pointer-events: auto;
   user-select: text;
   -webkit-user-select: text;
 }
 
+/* When focused - show text with white background to hide canvas text beneath */
 .textLayer .text-layer-span:focus {
-  background: rgba(255, 255, 255, 0.98);
-  box-shadow: 0 0 0 2px rgba(0, 125, 227, 0.4);
-  z-index: 10;
   color: #1a1a1a; /* Text visible when editing */
+  background: rgba(255, 255, 255, 1);
+  z-index: 10;
 }
 
+/* Edited blocks: ALWAYS visible (applied via JS but can be reinforced here) */
+.textLayer .text-layer-span[data-edited="true"] {
+  color: #1a1a1a;
+  background: rgba(255, 255, 255, 1);
+  z-index: 5;
+}
+
+/* No hover effect - clean like MS Word */
 .textLayer .text-layer-span:hover:not(:focus) {
-  background: rgba(0, 125, 227, 0.08);
+  /* No background change on hover */
 }
 
 /* Ensure selection is visible */
@@ -92,4 +100,24 @@
   outline: none;
 }
 
+/* Issue highlight animation - yellow flash when clicking on an issue */
+@keyframes issue-highlight-pulse {
+  0% {
+    background-color: rgb(254, 249, 195); /* yellow-100 */
+    box-shadow: 0 0 0 2px rgba(234, 179, 8, 0.5);
+  }
+  50% {
+    background-color: rgb(254, 240, 138); /* yellow-200 */
+    box-shadow: 0 0 0 4px rgba(234, 179, 8, 0.3);
+  }
+  100% {
+    background-color: rgba(255, 255, 255, 1);
+    box-shadow: none;
+  }
+}
 
+.issue-highlight-animation {
+  animation: issue-highlight-pulse 1.5s ease-out forwards;
+  color: #1a1a1a !important;
+  z-index: 15 !important;
+}

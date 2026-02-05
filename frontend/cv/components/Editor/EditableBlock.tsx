@@ -3,6 +3,7 @@
  * ContentEditable div positioned precisely over PDF text blocks
  * Transparent text by default to show PDF underneath
  * Visible caret for editing, text shows on hover/focus/highlight
+ * Uses FontMapper for correct font display matching PDF
  */
 
 'use client';
@@ -10,6 +11,7 @@
 import { memo, useRef, useCallback, useState, useEffect, useMemo } from 'react';
 import type { EditableBlockProps, PopoverPosition } from '@/types/editor';
 import SuggestionPopover from './SuggestionPopover';
+import { getFontInfo, getFontWeightValue, getFontStyleValue } from '@/utils/fontMapper';
 
 // Debounce utility for state updates
 function useDebounce<T>(value: T, delay: number): T {
@@ -197,10 +199,10 @@ const EditableBlock = memo(function EditableBlock({
     return baseStyles;
   }, [weakness, state.isDirty]);
 
-  // Determine if font is bold based on font name
-  const isBold = block.font_name.toLowerCase().includes('bold') || 
-                 block.font_name.toLowerCase().includes('heavy') ||
-                 block.font_name.toLowerCase().includes('black');
+  // Determine if font is bold based on font name - use FontMapper
+  const fontInfo = useMemo(() => getFontInfo(block.font_name), [block.font_name]);
+  const fontWeight = getFontWeightValue(fontInfo.weight);
+  const fontStyle = getFontStyleValue(fontInfo.style);
 
   return (
     <div
@@ -237,19 +239,21 @@ const EditableBlock = memo(function EditableBlock({
           left: 0,
           width: '100%',
           fontSize: `${scaledFontSize}px`,
+          fontFamily: fontInfo.displayFont,
+          fontWeight: fontWeight,
+          fontStyle: fontStyle,
           lineHeight: block.block_type === 'bullet' ? 1.3 : 1.15,
-          fontWeight: isBold ? 700 : 400,
           letterSpacing: '-0.01em',
           whiteSpace: 'pre-wrap',
           wordBreak: 'break-word',
           minHeight: scaledHeight,
-          // Transparent text by default - shows PDF text through
-          // Visible caret for editing feedback
-          color: shouldShowText ? '#1a1a1a' : 'transparent',
-          WebkitTextFillColor: shouldShowText ? '#1a1a1a' : 'transparent',
+          // For edited blocks, keep text visible with white background
+          // For non-edited blocks, transparent text shows PDF through
+          color: (shouldShowText || state.isDirty) ? '#1a1a1a' : 'transparent',
+          WebkitTextFillColor: (shouldShowText || state.isDirty) ? '#1a1a1a' : 'transparent',
           caretColor: '#000000',
-          // Ensure background is transparent initially
-          backgroundColor: weakness ? undefined : 'transparent',
+          // Edited blocks: white background to hide canvas text beneath
+          backgroundColor: state.isDirty ? 'rgba(255, 255, 255, 1)' : (weakness ? undefined : 'transparent'),
         }}
         data-block-id={block.id}
         data-block-type={block.block_type}
