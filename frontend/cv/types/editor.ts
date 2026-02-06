@@ -78,12 +78,29 @@ export interface BlockWeakness {
   improved_text?: string;
 }
 
+// ATS Score breakdown item (matches backend structure)
+export interface ATSBreakdownItem {
+  label: string;
+  score: number;
+  max_score: number;
+  percentage: number;
+}
+
+// ATS Score details (matches backend structure)
+export interface ATSScoreDetails {
+  total_score: number;
+  grade: string;
+  breakdown: ATSBreakdownItem[];
+}
+
 // Analysis response
 export interface AnalysisResult {
   success: boolean;
   weak_blocks: BlockWeakness[];
   total_analyzed: number;
   issues_found: number;
+  ats_score?: number;
+  ats_score_details?: ATSScoreDetails;
 }
 
 // Editor state for a single block

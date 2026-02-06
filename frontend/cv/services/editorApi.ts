@@ -176,10 +176,30 @@ export interface BlockUpdate {
   section?: string;
 }
 
+/**
+ * ATS Score breakdown item (matches backend ATSBreakdownItem)
+ */
+export interface ATSBreakdownItem {
+  label: string;
+  score: number;
+  max_score: number;
+  percentage: number;
+}
+
+/**
+ * Detailed ATS Score (matches backend ATSScoreDetails)
+ */
+export interface ATSScoreDetails {
+  total_score: number;
+  grade: string;
+  breakdown: ATSBreakdownItem[];
+}
+
 export interface UpdateResumeResponse {
   success: boolean;
   message: string;
   atsScore?: number;
+  atsScoreDetails?: ATSScoreDetails;
   updatedBlocks?: string[];
 }
 

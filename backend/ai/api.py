@@ -209,6 +209,7 @@ async def analyze_blocks(request: AnalyzeBlocksRequest):
     """
     Analyze resume blocks and return UUIDs of weak blocks with suggestions.
     Uses AI to identify areas for improvement.
+    Now also returns unified ATS score for consistency with Analyzer page.
     """
     try:
         weak_blocks = []
@@ -234,11 +235,32 @@ async def analyze_blocks(request: AnalyzeBlocksRequest):
                     'improved_text': weakness.get('improved_text', '')
                 })
         
+        # Calculate unified ATS score using same logic as Analyzer
+        blocks_for_scoring = [
+            {'text': block.get('text', ''), 'section': block.get('section', '')}
+            for block in request.blocks
+        ]
+        ats_details = calculate_unified_ats_score(blocks_for_scoring)
+        
         return JSONResponse(content={
             "success": True,
             "weak_blocks": weak_blocks,
             "total_analyzed": len(request.blocks),
-            "issues_found": len(weak_blocks)
+            "issues_found": len(weak_blocks),
+            "ats_score": ats_details.total_score,
+            "ats_score_details": {
+                "total_score": ats_details.total_score,
+                "grade": ats_details.grade,
+                "breakdown": [
+                    {
+                        "label": item.label,
+                        "score": item.score,
+                        "max_score": item.max_score,
+                        "percentage": item.percentage
+                    }
+                    for item in ats_details.breakdown
+                ]
+            }
         })
     
     except Exception as e:
@@ -504,12 +526,189 @@ class UpdateResumeRequest(BaseModel):
     blocks: List[BlockUpdateItem]
 
 
+class ATSBreakdownItem(BaseModel):
+    """Single item in ATS score breakdown"""
+    label: str
+    score: int
+    max_score: int
+    percentage: int
+
+
+class ATSScoreDetails(BaseModel):
+    """Detailed ATS score with breakdown"""
+    total_score: int
+    grade: str
+    breakdown: List[ATSBreakdownItem]
+
+
 class UpdateResumeResponse(BaseModel):
     """Response from update resume endpoint"""
     success: bool
     message: str
     atsScore: Optional[int] = None
+    atsScoreDetails: Optional[ATSScoreDetails] = None
     updatedBlocks: Optional[List[str]] = None
+
+
+# ATS Keywords for unified scoring (same as resume_parser.py)
+ATS_KEYWORDS = {
+    'action_verbs': ['developed', 'designed', 'implemented', 'led', 'managed', 'created', 'built', 
+                    'improved', 'optimized', 'increased', 'reduced', 'achieved', 'delivered'],
+    'quantifiers': [r'\d+%', r'\$\d+', r'\d+x', r'\d+\+'],
+    'leadership': ['led', 'managed', 'supervised', 'coordinated', 'mentored', 'trained'],
+    'impact': ['increased', 'decreased', 'improved', 'reduced', 'optimized', 'enhanced', 'accelerated']
+}
+
+
+def calculate_unified_ats_score(blocks: List[Dict[str, Any]], all_resume_state: Dict[str, Any] = None) -> ATSScoreDetails:
+    """
+    Calculate ATS score using the SAME logic as resume_parser.py.
+    This ensures Analyzer and Editor show consistent scores.
+    
+    Args:
+        blocks: List of text blocks with 'text' and 'section' fields
+        all_resume_state: Optional full resume state for comprehensive scoring
+        
+    Returns:
+        ATSScoreDetails with breakdown by category
+    """
+    # Combine all text for analysis
+    full_text = ' '.join(block.get('text', block.get('newText', '')) for block in blocks)
+    text_lower = full_text.lower()
+    
+    # Initialize breakdown structure (matching resume_parser.py categories)
+    breakdown = {}
+    
+    # 1. Contact Info Score (max 20 points)
+    contact_score = 0
+    contact_indicators = {
+        'email': bool(re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', full_text)),
+        'phone': bool(re.search(r'[\+\(]?[1-9][0-9 .\-\(\)]{8,}[0-9]', full_text)),
+        'linkedin': bool(re.search(r'linkedin', text_lower)),
+        'location': bool(re.search(r'\b(city|state|street|avenue|road|[A-Z][a-z]+,\s*[A-Z]{2})\b', full_text, re.I)),
+    }
+    for indicator, present in contact_indicators.items():
+        if present:
+            contact_score += 5
+    breakdown['contact_info'] = min(20, contact_score)
+    
+    # 2. Skills Score (max 25 points)
+    skills_text = ' '.join(
+        block.get('text', block.get('newText', '')) 
+        for block in blocks 
+        if block.get('section', '').lower() == 'skills'
+    )
+    # Count skill-related keywords
+    skill_keywords = ['python', 'javascript', 'java', 'react', 'node', 'sql', 'aws', 'docker', 
+                     'kubernetes', 'git', 'agile', 'scrum', 'api', 'database', 'cloud']
+    skill_matches = sum(1 for skill in skill_keywords if skill in text_lower)
+    skills_score = min(25, skill_matches * 2)
+    breakdown['skills'] = skills_score
+    
+    # 3. Experience Score (max 30 points)
+    exp_score = 0
+    experience_blocks = [
+        b for b in blocks 
+        if b.get('section', '').lower() in ['experience', 'work', 'employment']
+    ]
+    
+    # Points for having experience entries
+    exp_score += min(15, len(experience_blocks) * 3)
+    
+    # Points for quantifiers (metrics, percentages, dollar amounts)
+    quantifiers = sum(1 for pattern in ATS_KEYWORDS['quantifiers'] 
+                     for _ in re.finditer(pattern, full_text))
+    exp_score += min(10, quantifiers * 2)
+    
+    # Points for action verbs
+    action_verb_count = sum(text_lower.count(verb) for verb in ATS_KEYWORDS['action_verbs'])
+    exp_score += min(5, action_verb_count)
+    
+    breakdown['experience'] = min(30, exp_score)
+    
+    # 4. Education Score (max 10 points)
+    education_blocks = [
+        b for b in blocks 
+        if b.get('section', '').lower() in ['education', 'academic']
+    ]
+    edu_score = min(10, len(education_blocks) * 5)
+    # Also check for degree keywords
+    degree_keywords = ['bachelor', 'master', 'phd', 'degree', 'university', 'college', 'bs', 'ms', 'ba', 'ma']
+    if any(kw in text_lower for kw in degree_keywords):
+        edu_score = max(edu_score, 5)
+    breakdown['education'] = min(10, edu_score)
+    
+    # 5. Formatting & Keywords Score (max 15 points)
+    format_score = 0
+    
+    # Check for summary/profile section
+    has_summary = any(
+        b.get('section', '').lower() in ['summary', 'profile', 'objective']
+        for b in blocks
+    )
+    if has_summary:
+        format_score += 5
+    
+    # Check for industry keywords
+    industry_keywords = ['project', 'team', 'client', 'stakeholder', 'deadline', 'budget', 
+                        'requirement', 'solution', 'strategy', 'analysis']
+    keyword_count = sum(1 for kw in industry_keywords if kw in text_lower)
+    format_score += min(10, keyword_count)
+    
+    breakdown['formatting_keywords'] = min(15, format_score)
+    
+    # Calculate total score
+    total_score = sum(breakdown.values())
+    
+    # Determine grade
+    if total_score >= 85:
+        grade = 'A (Excellent)'
+    elif total_score >= 70:
+        grade = 'B (Good)'
+    elif total_score >= 55:
+        grade = 'C (Fair)'
+    else:
+        grade = 'D (Needs Improvement)'
+    
+    # Build breakdown list with labels and percentages
+    breakdown_items = [
+        ATSBreakdownItem(
+            label='Contact Information',
+            score=breakdown['contact_info'],
+            max_score=20,
+            percentage=int((breakdown['contact_info'] / 20) * 100)
+        ),
+        ATSBreakdownItem(
+            label='Skills',
+            score=breakdown['skills'],
+            max_score=25,
+            percentage=int((breakdown['skills'] / 25) * 100)
+        ),
+        ATSBreakdownItem(
+            label='Experience',
+            score=breakdown['experience'],
+            max_score=30,
+            percentage=int((breakdown['experience'] / 30) * 100)
+        ),
+        ATSBreakdownItem(
+            label='Education',
+            score=breakdown['education'],
+            max_score=10,
+            percentage=int((breakdown['education'] / 10) * 100)
+        ),
+        ATSBreakdownItem(
+            label='Formatting & Keywords',
+            score=breakdown['formatting_keywords'],
+            max_score=15,
+            percentage=int((breakdown['formatting_keywords'] / 15) * 100)
+        ),
+    ]
+    
+    return ATSScoreDetails(
+        total_score=total_score,
+        grade=grade,
+        breakdown=breakdown_items
+    )
 
 
 def calculate_ats_score(blocks: List[Dict[str, Any]]) -> int:
@@ -559,9 +758,9 @@ def calculate_ats_score(blocks: List[Dict[str, Any]]) -> int:
 async def update_resume(request: UpdateResumeRequest):
     """
     Update resume block text and persist changes to disk.
-    Returns success status and recalculated ATS score.
+    Returns success status and recalculated ATS score with detailed breakdown.
     
-    CRITICAL: This now persists to disk so changes survive server restarts.
+    CRITICAL: Uses the SAME scoring logic as the Analyzer for consistency.
     """
     try:
         updated_block_ids = []
@@ -588,19 +787,29 @@ async def update_resume(request: UpdateResumeRequest):
         if not save_resume_state():
             raise Exception("Failed to persist changes to disk")
         
-        # Calculate new ATS score based on all updates
-        blocks_for_scoring = [
-            {'text': b.newText, 'section': b.section}
-            for b in request.blocks
+        # Build complete block list from all stored state for accurate scoring
+        all_blocks = [
+            {'text': state['text'], 'section': state.get('section', '')}
+            for state in _resume_state.values()
         ]
-        ats_score = calculate_ats_score(blocks_for_scoring)
         
-        print(f"[api.py] Successfully saved {len(updated_block_ids)} block(s), ATS score: {ats_score}")
+        # If we have no stored state, use the incoming blocks
+        if not all_blocks:
+            all_blocks = [
+                {'text': b.newText, 'section': b.section or ''}
+                for b in request.blocks
+            ]
+        
+        # Calculate new ATS score using UNIFIED scoring logic (same as Analyzer)
+        ats_details = calculate_unified_ats_score(all_blocks)
+        
+        print(f"[api.py] Successfully saved {len(updated_block_ids)} block(s), ATS score: {ats_details.total_score}")
         
         return UpdateResumeResponse(
             success=True,
             message=f"Successfully updated {len(updated_block_ids)} block(s)",
-            atsScore=ats_score,
+            atsScore=ats_details.total_score,
+            atsScoreDetails=ats_details,
             updatedBlocks=updated_block_ids
         )
     

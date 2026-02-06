@@ -1,14 +1,20 @@
 {
   "block-1-96": {
-    "text": "Led in organizing technical workshops and hackathons to promote student innovation.",
+    "text": "Organized organizing technical workshops and hackathons to promote student innovation.",
     "oldText": "Assisted in organizing technical workshops and hackathons to promote student innovation.",
     "section": "experience",
-    "updated_at": "Thu Feb  5 11:05:45 +0545 2026"
+    "updated_at": "Fri Feb  6 08:54:58 +0545 2026"
   },
   "ff047ca1-a15d-4584-ac0d-2c4738f17f10": {
     "text": "Motivated Casomputer Science undergraduate at Kathmandu University (GPA: 3.59) with a strong foundation",
     "oldText": "Motivated Computer Science undergraduate at Kathmandu University (GPA: 3.59) with a strong foundation",
     "section": "summary",
     "updated_at": "Thu  5 Feb 2026 08:02:12 +0545"
+  },
+  "b325bc9f-6387-404d-adbc-a85174de5e41": {
+    "text": "into deployable solutions — from full-stack restaurant systems to sign-language recognition models. Driven",
+    "oldText": "into deployable solutions — from full-stack restaurant systems to sign-language recognition models. Passionate",
+    "section": "skills",
+    "updated_at": "Thu Feb  5 11:07:12 +0545 2026"
   }
 }

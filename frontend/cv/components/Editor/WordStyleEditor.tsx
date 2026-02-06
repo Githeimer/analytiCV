@@ -235,14 +235,10 @@ const WordStyleEditor = memo(forwardRef<DocumentCanvasRef, WordStyleEditorProps>
 
   // FIX #4: Handle block save with cleanup - use ref to prevent stale closures
   const handleBlockSave = useCallback(async (update: BlockUpdate) => {
-    console.log('[WordStyleEditor] handleBlockSave called with:', update);
     const saveCallback = onBlockSaveRef.current;
     if (saveCallback) {
       await saveCallback(update);
-      // Clear the saved change from tracking
       changesMapRef.current.delete(update.blockId);
-    } else {
-      console.warn('[WordStyleEditor] No onBlockSave callback provided');
     }
   }, []);
 

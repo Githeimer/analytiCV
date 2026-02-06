@@ -195,7 +195,6 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
       return true;
     }
 
-    console.log('[DocumentCanvas] Saving', pendingSavesRef.current.size, 'pending change(s)');
     isSavingRef.current = true;
 
     try {
@@ -320,50 +319,47 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
     
     // Save if text changed
     if (hasChanged) {
-      console.log('[DocumentCanvas] Text changed, queueing save:', { blockId: block.id, oldText: originalText, newText });
-      
       // Update local block text immediately to prevent re-render
       block.text = newText;
-      block.isEdited = true; // Mark as edited
+      block.isEdited = true;
       originalTextRef.current.set(block.id, newText);
       
-      // IMMEDIATELY save to localStorage (survives refresh)
-      // Mark as dirty since backend save is still pending
+      // Set data attribute for CSS styling
+      span.dataset.edited = 'true';
+      
+      // Save to localStorage (survives refresh)
       saveEditsToStorage(
         [{ blockId: block.id, oldText: originalText, newText, section: block.section }],
         'current_resume',
-        true // dirty = true (not yet saved to backend)
+        true
       );
       markEditsDirty();
       
       // Queue for backend save
       queueBlockSave(block.id, originalText, newText, block.section);
       
-      // Notify parent for local state update (but don't trigger analysis)
+      // Notify parent for local state update
       onTextChangeRef.current?.(block.id, originalText, newText);
     }
 
     // Visual state after blur:
-    // - If block is edited, keep text VISIBLE with white background (hides canvas behind)
-    // - If block is highlighted (has issue), show highlight
-    // - Otherwise, make transparent to show canvas
+    // Edited blocks: ALWAYS visible with white background (hides canvas behind)
+    // Highlighted but not edited: show highlight, transparent text
+    // Otherwise: transparent to show canvas
     const highlighted = highlightedBlockIdsRef.current?.has(block.id);
     const isEdited = block.isEdited || hasChanged;
     
     if (isEdited) {
-      // Edited blocks: ALWAYS visible to prevent overlap with canvas text
       span.style.color = '#1a1a1a';
       span.style.background = 'rgba(255, 255, 255, 1)';
       span.style.boxShadow = highlighted ? 'inset 0 -2px 0 0 #f59e0b' : 'none';
       span.style.zIndex = '5';
     } else if (highlighted) {
-      // Highlighted but not edited: show highlight, transparent text
       span.style.color = 'transparent';
       span.style.background = 'rgba(245, 158, 11, 0.15)';
       span.style.boxShadow = 'inset 0 -2px 0 0 #f59e0b';
       span.style.zIndex = '';
     } else {
-      // Default: transparent to show canvas
       span.style.color = 'transparent';
       span.style.background = 'transparent';
       span.style.boxShadow = 'none';
@@ -650,6 +646,11 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
         span.dataset.blockId = block.id;
         span.dataset.section = block.section;
         span.dataset.fontName = textItem.fontName || 'sans-serif';
+        
+        // Set data-edited attribute for CSS styling persistence
+        if (wasEdited) {
+          span.dataset.edited = 'true';
+        }
 
         // Accessibility
         span.setAttribute('role', 'textbox');
@@ -733,12 +734,10 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
 
     const handleContextLost = (e: Event) => {
       e.preventDefault();
-      console.warn('[DocumentCanvas] Canvas context lost');
       setRenderState('error');
     };
 
     const handleContextRestored = () => {
-      console.log('[DocumentCanvas] Canvas context restored');
       renderPage();
     };
 

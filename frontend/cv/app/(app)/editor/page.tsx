@@ -56,7 +56,7 @@ function EditorLoadingSkeleton() {
 }
 
 import { extractPDFBlocks, analyzeBlocks, updateResumeBlocks } from '@/services/editorApi';
-import type { BlockUpdate } from '@/services/editorApi';
+import type { BlockUpdate, ATSScoreDetails } from '@/services/editorApi';
 import { exportToPDF, downloadPDF, fileToArrayBuffer } from '@/utils/pdfExport';
 import type { DocumentCanvasRef } from '@/components/Editor/WordStyleEditor';
 
@@ -80,6 +80,7 @@ export default function EditorPage() {
   const [isUploading, setIsUploading] = useState(false);
   const [selectedIssueId, setSelectedIssueId] = useState<string | null>(null);
   const [atsScore, setAtsScore] = useState<number | null>(null);
+  const [atsScoreDetails, setAtsScoreDetails] = useState<ATSScoreDetails | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [hasPendingChanges, setHasPendingChanges] = useState(false);
   const [lastSaveTime, setLastSaveTime] = useState<Date | null>(null);
@@ -164,11 +165,13 @@ export default function EditorPage() {
       const result = await analyzeBlocks(blocksWithCurrentText);
       setWeakBlocks(result.weak_blocks);
       
-      // Calculate and set ATS score
-      const totalBlocks = result.total_analyzed;
-      const issueCount = result.issues_found;
-      const score = Math.max(0, Math.round(100 - (issueCount / Math.max(totalBlocks, 1)) * 50));
-      setAtsScore(score);
+      // Use unified ATS score from backend (same logic as Analyzer page)
+      if (result.ats_score !== undefined) {
+        setAtsScore(result.ats_score);
+      }
+      if (result.ats_score_details) {
+        setAtsScoreDetails(result.ats_score_details);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to analyze resume');
     } finally {
@@ -223,7 +226,7 @@ export default function EditorPage() {
     [updateBlockText]
   );
 
-  // Handle block save - persist to backend
+  // Handle block save - persist to backend and update ATS score
   // This is called by DocumentCanvas when user finishes editing (blur/Enter key)
   const handleBlockSave = useCallback(async (update: BlockUpdate): Promise<void> => {
     console.log('[EditorPage] handleBlockSave called with:', update);
@@ -246,6 +249,14 @@ export default function EditorPage() {
       const response = await updateResumeBlocks([backendUpdate]);
       
       console.log('[EditorPage] Backend response:', response);
+      
+      // Update ATS score from unified backend calculation
+      if (response.atsScore !== undefined) {
+        setAtsScore(response.atsScore);
+      }
+      if (response.atsScoreDetails) {
+        setAtsScoreDetails(response.atsScoreDetails);
+      }
       
       // Update last save time
       setLastSaveTime(new Date());
@@ -604,16 +615,41 @@ export default function EditorPage() {
                 </div>
 
                 <div className="p-4 space-y-4">
-                  {/* ATS Score Display */}
+                  {/* ATS Score Display - Now shows unified score from backend */}
                   {atsScore !== null && (
-                    <div className="flex items-center justify-between text-sm p-3 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border border-blue-100">
-                      <span className="text-gray-700 font-medium">ATS Score:</span>
-                      <span className={`font-bold text-xl ${
-                        atsScore >= 80 ? 'text-green-600' : 
-                        atsScore >= 60 ? 'text-yellow-600' : 'text-red-600'
-                      }`}>
-                        {atsScore}%
-                      </span>
+                    <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border border-blue-100 overflow-hidden">
+                      <div className="flex items-center justify-between p-3">
+                        <span className="text-gray-700 font-medium text-sm">ATS Score:</span>
+                        <span className={`font-bold text-xl ${
+                          atsScore >= 70 ? 'text-green-600' : 
+                          atsScore >= 55 ? 'text-yellow-600' : 'text-red-600'
+                        }`}>
+                          {atsScore}
+                        </span>
+                      </div>
+                      {/* ATS Score Breakdown */}
+                      {atsScoreDetails && (
+                        <div className="border-t border-blue-100 p-3 space-y-2">
+                          <div className="text-xs text-gray-500 mb-2">{atsScoreDetails.grade}</div>
+                          {atsScoreDetails.breakdown.map((item, index) => (
+                            <div key={index} className="flex items-center justify-between text-xs">
+                              <span className="text-gray-600 truncate mr-2">{item.label}</span>
+                              <div className="flex items-center gap-2">
+                                <div className="w-16 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                                  <div 
+                                    className={`h-full rounded-full ${
+                                      item.percentage >= 70 ? 'bg-green-500' : 
+                                      item.percentage >= 50 ? 'bg-yellow-500' : 'bg-red-500'
+                                    }`}
+                                    style={{ width: `${item.percentage}%` }}
+                                  />
+                                </div>
+                                <span className="text-gray-500 w-8 text-right">{item.score}/{item.max_score}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                   
