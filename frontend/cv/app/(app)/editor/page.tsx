@@ -1,6 +1,12 @@
 /**
- * PDF Inline Editor Page - IMPROVED VERSION
+ * PDF Inline Editor Page - FIXED VERSION
  * Document-style inline editor with professional document editing environment
+ * 
+ * CRITICAL FIX: Sequential Save-Then-Analyze Flow
+ * - Step 1: Force save all pending changes
+ * - Step 2: Get current blocks from DocumentCanvas (not stale state)
+ * - Step 3: Send current blocks to backend for analysis
+ * - Step 4: Update ONLY analysis UI (no PDF re-render)
  * 
  * Key Improvements:
  * - Fixed auto-refresh issue - changes no longer trigger page reload
@@ -84,6 +90,7 @@ export default function EditorPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [hasPendingChanges, setHasPendingChanges] = useState(false);
   const [lastSaveTime, setLastSaveTime] = useState<Date | null>(null);
+  const [savedBlocksMap, setSavedBlocksMap] = useState<Map<string, string>>(new Map());
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pdfBytesRef = useRef<ArrayBuffer | null>(null);
@@ -107,6 +114,11 @@ export default function EditorPage() {
       if (success) {
         setHasPendingChanges(false);
         setLastSaveTime(new Date());
+        
+        // Update saved blocks map for DocumentCanvas to use
+        const currentBlocks = editorRef.current.getCurrentBlocks();
+        const newMap = new Map(currentBlocks.map(b => [b.id, b.text]));
+        setSavedBlocksMap(newMap);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save changes');
@@ -128,7 +140,8 @@ export default function EditorPage() {
 
       setIsUploading(true);
       setError(null);
-      setAtsScore(null); // Reset score for new file
+      setAtsScore(null);
+      setSavedBlocksMap(new Map()); // Reset saved blocks map
 
       try {
         pdfBytesRef.current = await fileToArrayBuffer(file);
@@ -145,39 +158,100 @@ export default function EditorPage() {
     [setPdf, setExtractionResult]
   );
 
-  // Handle analyze button click - MANUAL ONLY, no auto-triggering
+  // CRITICAL FIX: Handle analyze button click with proper sequential flow
   const handleAnalyze = useCallback(async () => {
-    if (!state.extractionResult) return;
+    if (!state.extractionResult || !editorRef.current) return;
 
     setAnalyzing(true);
     setError(null);
 
     try {
-      // Get current text from blocks for analysis
-      const blocksWithCurrentText = state.extractionResult.blocks.map((block) => {
-        const blockState = state.blocks.get(block.id);
-        return {
-          ...block,
-          text: blockState?.currentText || block.text,
-        };
+      // STEP 1: Force save any pending changes FIRST
+      // This ensures the backend has the latest text (e.g., '2025' not '2024')
+      console.log('[EditorPage] Step 1: Checking for pending changes...');
+      if (hasPendingChanges) {
+        console.log('[EditorPage] Pending changes detected, saving before analysis...');
+        setIsSaving(true);
+        const saveSuccess = await editorRef.current.saveChanges();
+        setIsSaving(false);
+        
+        if (!saveSuccess) {
+          throw new Error('Failed to save changes before analysis');
+        }
+        
+        setHasPendingChanges(false);
+        setLastSaveTime(new Date());
+        console.log('[EditorPage] ✅ Save completed successfully');
+        
+        // Update saved blocks map
+        const currentBlocks = editorRef.current.getCurrentBlocks();
+        const newMap = new Map(currentBlocks.map(b => [b.id, b.text]));
+        setSavedBlocksMap(newMap);
+        
+        // CRITICAL: Wait for the backend to finish processing the save
+        // Give it a moment to ensure the saved state is fully committed
+        await new Promise(resolve => setTimeout(resolve, 500));
+      } else {
+        console.log('[EditorPage] No pending changes, proceeding with analysis...');
+      }
+
+      // STEP 2: Get CURRENT blocks from DocumentCanvas (not stale state)
+      // This is the actual current state of the editor, including all edits
+      console.log('[EditorPage] Step 2: Getting current blocks from DocumentCanvas...');
+      const currentBlocks = editorRef.current.getCurrentBlocks();
+      console.log('[EditorPage] Current blocks count:', currentBlocks.length);
+      
+      // Map DocumentCanvas blocks back to extraction result format
+      // The DocumentCanvas uses `block-${pageNumber}-${index}` IDs
+      // We need to map these back to the original extraction block IDs
+      const blocksForAnalysis = state.extractionResult.blocks.map((originalBlock, index) => {
+        // Find the corresponding current block by index
+        const currentBlock = currentBlocks.find(cb => {
+          const spanIndex = parseInt(cb.id.split('-').pop() || '0');
+          return spanIndex === index;
+        });
+        
+        if (currentBlock) {
+          console.log(`[EditorPage] Block ${index}: Using current text: "${currentBlock.text}"`);
+          return {
+            ...originalBlock,
+            text: currentBlock.text, // Use the CURRENT edited text
+          };
+        }
+        
+        console.log(`[EditorPage] Block ${index}: Using original text: "${originalBlock.text}"`);
+        return originalBlock;
       });
       
-      const result = await analyzeBlocks(blocksWithCurrentText);
+      console.log('[EditorPage] Step 3: Sending blocks to backend for analysis...');
+      console.log('[EditorPage] Sample block texts:', blocksForAnalysis.slice(0, 3).map(b => b.text));
+      
+      // STEP 3: Send to backend for analysis
+      // The editorApi.analyzeBlocks() function will merge saved edits from backend
+      const result = await analyzeBlocks(blocksForAnalysis);
+      
+      console.log('[EditorPage] Step 4: Analysis complete, updating UI...');
+      
+      // STEP 4: Update ONLY analysis state - do NOT re-initialize PDF renderer
+      // This prevents the UI from reverting to the original PDF
       setWeakBlocks(result.weak_blocks);
       
-      // Use unified ATS score from backend (same logic as Analyzer page)
       if (result.ats_score !== undefined) {
         setAtsScore(result.ats_score);
+        console.log('[EditorPage] ✅ ATS Score updated:', result.ats_score);
       }
       if (result.ats_score_details) {
         setAtsScoreDetails(result.ats_score_details);
       }
+      
+      console.log('[EditorPage] ✅ Analysis flow completed successfully');
     } catch (err) {
+      console.error('[EditorPage] Analysis failed:', err);
       setError(err instanceof Error ? err.message : 'Failed to analyze resume');
     } finally {
       setAnalyzing(false);
     }
-  }, [state.extractionResult, state.blocks, setAnalyzing, setWeakBlocks]);
+  }, [state.extractionResult, setAnalyzing, setWeakBlocks, hasPendingChanges]);
 
   // Handle export button click
   const handleExport = useCallback(async () => {
@@ -189,6 +263,11 @@ export default function EditorPage() {
       try {
         await editorRef.current.saveChanges();
         setHasPendingChanges(false);
+        
+        // Update saved blocks map
+        const currentBlocks = editorRef.current.getCurrentBlocks();
+        const newMap = new Map(currentBlocks.map(b => [b.id, b.text]));
+        setSavedBlocksMap(newMap);
       } catch (err) {
         setError('Failed to save changes before export');
         setIsSaving(false);
@@ -260,6 +339,13 @@ export default function EditorPage() {
       
       // Update last save time
       setLastSaveTime(new Date());
+      
+      // Update saved blocks map
+      if (editorRef.current) {
+        const currentBlocks = editorRef.current.getCurrentBlocks();
+        const newMap = new Map(currentBlocks.map(b => [b.id, b.text]));
+        setSavedBlocksMap(newMap);
+      }
     } catch (error) {
       // Re-throw to let DocumentCanvas handle the error state
       console.error('[EditorPage] Failed to save block:', error);
@@ -456,10 +542,10 @@ export default function EditorPage() {
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
                     onClick={handleAnalyze}
-                    disabled={state.isAnalyzing}
+                    disabled={state.isAnalyzing || isSaving}
                     className={`
                       px-4 py-2 rounded-lg font-medium text-sm flex items-center gap-2
-                      ${state.isAnalyzing
+                      ${state.isAnalyzing || isSaving
                         ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
                         : 'bg-yellow-50 text-yellow-700 border border-yellow-300 hover:bg-yellow-100'
                       }
@@ -468,7 +554,7 @@ export default function EditorPage() {
                     {state.isAnalyzing ? (
                       <>
                         <div className="w-4 h-4 border-2 border-yellow-400 border-t-transparent rounded-full animate-spin" />
-                        Analyzing...
+                        {isSaving ? 'Saving first...' : 'Analyzing...'}
                       </>
                     ) : (
                       <>
@@ -770,6 +856,8 @@ export default function EditorPage() {
                   weakBlocks={state.weakBlocks}
                   scale={state.scale}
                   currentPage={state.currentPage}
+                  isAnalyzing={state.isAnalyzing}
+                  updatedBlocks={savedBlocksMap}
                   onTextChange={handleBlockTextChange}
                   onBlockSave={handleBlockSave}
                   onPendingChangesChange={handlePendingChangesChange}

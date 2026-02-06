@@ -209,12 +209,33 @@ async def analyze_blocks(request: AnalyzeBlocksRequest):
     """
     Analyze resume blocks and return UUIDs of weak blocks with suggestions.
     Uses AI to identify areas for improvement.
-    Now also returns unified ATS score for consistency with Analyzer page.
+    
+    CRITICAL: Uses the persisted state from update-resume endpoint.
+    This ensures analysis reflects the SAVED text (e.g., '2025') not original PDF text ('2024').
     """
     try:
         weak_blocks = []
         
+        # CRITICAL: Merge incoming blocks with saved state
+        # Priority: _resume_state (saved) > request.blocks (frontend)
+        # This ensures we analyze the LATEST saved version
+        blocks_to_analyze = []
         for block in request.blocks:
+            block_id = block.get('id')
+            
+            # Check if we have a saved version of this block
+            if block_id in _resume_state:
+                saved = _resume_state[block_id]
+                blocks_to_analyze.append({
+                    'id': block_id,
+                    'text': saved.get('text', block.get('text', '')),
+                    'block_type': block.get('block_type', ''),
+                    'section': saved.get('section', block.get('section', ''))
+                })
+            else:
+                blocks_to_analyze.append(block)
+        
+        for block in blocks_to_analyze:
             block_id = block.get('id')
             text = block.get('text', '')
             block_type = block.get('block_type', '')
@@ -231,21 +252,21 @@ async def analyze_blocks(request: AnalyzeBlocksRequest):
                     'id': block_id,
                     'issue': weakness['issue'],
                     'suggestion': weakness['suggestion'],
-                    'severity': weakness['severity'],  # low, medium, high
+                    'severity': weakness['severity'],
                     'improved_text': weakness.get('improved_text', '')
                 })
         
-        # Calculate unified ATS score using same logic as Analyzer
+        # Calculate unified ATS score using the merged blocks (reflects saved state)
         blocks_for_scoring = [
             {'text': block.get('text', ''), 'section': block.get('section', '')}
-            for block in request.blocks
+            for block in blocks_to_analyze
         ]
         ats_details = calculate_unified_ats_score(blocks_for_scoring)
         
         return JSONResponse(content={
             "success": True,
             "weak_blocks": weak_blocks,
-            "total_analyzed": len(request.blocks),
+            "total_analyzed": len(blocks_to_analyze),
             "issues_found": len(weak_blocks),
             "ats_score": ats_details.total_score,
             "ats_score_details": {

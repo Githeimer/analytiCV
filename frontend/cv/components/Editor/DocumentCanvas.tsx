@@ -1,30 +1,26 @@
 /**
- * DocumentCanvas Component - IMPROVED VERSION
+ * DocumentCanvas Component - FIXED VERSION
  * MS Word-style inline PDF editor using the "Ghost Text Layer" strategy
  * 
- * Key Improvements:
- * - Fixed auto-refresh issue by preventing unnecessary re-renders
- * - Better change tracking and debouncing
- * - Separated immediate UI updates from backend saves
- * - Improved error handling and recovery
- * - Memory leak prevention
- * - Fixed visual persistence: edited text always visible, canvas hidden for edited lines
- * - Font matching: applies correct font-family from PDF metadata
+ * CRITICAL FIX: Backend State Synchronization
+ * - Added updatedBlocks prop to receive saved state from backend
+ * - Prevents reversion to original PDF text after analysis
+ * - Text blocks now sourced from: updatedBlocks > localStorage > original PDF
+ * - Component no longer triggers re-render on analysis completion
  */
 
 import { memo, useEffect, useRef, useState, useCallback, useImperativeHandle, forwardRef } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import { getFontInfo, buildFontStyles } from '@/utils/fontMapper';
-import { saveEditsToStorage, markEditsDirty } from '@/utils/editorStorage';
+import { saveEditsToStorage, markEditsDirty, getStoredEdits } from '@/utils/editorStorage';
 
 // ============================================================================
 // Constants
 // ============================================================================
 
 const DEBOUNCE_MS = 1000;
-const AUTO_SAVE_INTERVAL = 5000; // Auto-save every 5 seconds if there are changes
+const AUTO_SAVE_INTERVAL = 5000;
 
-// Configure pdf.js worker - MUST match installed pdfjs-dist version
 if (typeof window !== 'undefined') {
   pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.530/build/pdf.worker.min.mjs`;
 }
@@ -44,7 +40,7 @@ export interface ResumeBlock {
   height: number;
   fontSize: number;
   fontFamily: string;
-  isEdited: boolean; // Track if block has been edited
+  isEdited: boolean;
 }
 
 export interface BlockUpdate {
@@ -60,6 +56,8 @@ interface DocumentCanvasProps {
   pdfUrl: string;
   pageNumber: number;
   scale: number;
+  isLocked?: boolean;
+  updatedBlocks?: Map<string, string>; // NEW: Backend-saved text blocks
   onBlocksExtracted?: (blocks: ResumeBlock[]) => void;
   onTextChange?: (blockId: string, oldText: string, newText: string) => void;
   onBlockSave?: (update: BlockUpdate) => Promise<void>;
@@ -69,11 +67,11 @@ interface DocumentCanvasProps {
   highlightedBlockIds?: Set<string>;
 }
 
-// Exposed methods via ref
 export interface DocumentCanvasRef {
   saveChanges: () => Promise<boolean>;
   hasPendingChanges: () => boolean;
   getPendingChanges: () => BlockUpdate[];
+  getCurrentBlocks: () => ResumeBlock[]; // NEW: Get current state
 }
 
 interface TextItem {
@@ -94,6 +92,8 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
   pdfUrl,
   pageNumber,
   scale,
+  isLocked = false,
+  updatedBlocks, // NEW: Receive backend-saved blocks
   onBlocksExtracted,
   onTextChange,
   onBlockSave,
@@ -125,16 +125,19 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const blockMapRef = useRef<Map<HTMLElement, ResumeBlock>>(new Map());
+  const blocksByIdRef = useRef<Map<string, ResumeBlock>>(new Map()); // NEW: Quick lookup
   const pendingChangesRef = useRef<Set<string>>(new Set());
   const pendingSavesRef = useRef<Map<string, BlockUpdate>>(new Map());
   const originalTextRef = useRef<Map<string, string>>(new Map());
   const isSavingRef = useRef<boolean>(false);
   
-  // Flag to prevent mutation observer from triggering during programmatic changes
   const isProgrammaticChangeRef = useRef(false);
+  
+  const isLockedRef = useRef(isLocked);
+  useEffect(() => { isLockedRef.current = isLocked; }, [isLocked]);
 
   // ============================================================================
-  // Refs for callbacks (prevent stale closures)
+  // Refs for callbacks
   // ============================================================================
   const onTextChangeRef = useRef(onTextChange);
   const onATSRecalculateRef = useRef(onATSRecalculate);
@@ -142,14 +145,15 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
   const onPendingChangesChangeRef = useRef(onPendingChangesChange);
   const onBlockSaveRef = useRef(onBlockSave);
   const highlightedBlockIdsRef = useRef(highlightedBlockIds);
+  const updatedBlocksRef = useRef(updatedBlocks); // NEW: Track updated blocks
 
-  // Keep refs in sync with props
   useEffect(() => { onTextChangeRef.current = onTextChange; }, [onTextChange]);
   useEffect(() => { onATSRecalculateRef.current = onATSRecalculate; }, [onATSRecalculate]);
   useEffect(() => { onErrorRef.current = onError; }, [onError]);
   useEffect(() => { onBlockSaveRef.current = onBlockSave; }, [onBlockSave]);
   useEffect(() => { onPendingChangesChangeRef.current = onPendingChangesChange; }, [onPendingChangesChange]);
   useEffect(() => { highlightedBlockIdsRef.current = highlightedBlockIds; }, [highlightedBlockIds]);
+  useEffect(() => { updatedBlocksRef.current = updatedBlocks; }, [updatedBlocks]);
 
   // ============================================================================
   // Component state
@@ -158,7 +162,6 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
   const [hasPendingChanges, setHasPendingChanges] = useState(false);
   const [dimensions, setDimensions] = useState<{ width: number; height: number } | null>(null);
 
-  // Notify parent when pending changes status changes
   useEffect(() => {
     onPendingChangesChangeRef.current?.(hasPendingChanges);
   }, [hasPendingChanges]);
@@ -167,7 +170,6 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
   // Core utility functions
   // ============================================================================
 
-  // Cancel any ongoing render task
   const cancelCurrentRender = useCallback(() => {
     if (renderTaskRef.current) {
       try {
@@ -179,17 +181,34 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
     }
   }, []);
 
-  // Error handling with callback
   const handleError = useCallback((error: Error, context: 'load' | 'save' | 'render') => {
     console.error(`[DocumentCanvas ${context}] Error:`, error);
     onErrorRef.current?.(error, context);
   }, []);
 
   // ============================================================================
+  // NEW: Get resolved text for a block (priority: updatedBlocks > localStorage > original)
+  // ============================================================================
+  const getResolvedText = useCallback((blockId: string, originalText: string): string => {
+    // Priority 1: Backend-saved blocks (from parent after save)
+    if (updatedBlocksRef.current?.has(blockId)) {
+      return updatedBlocksRef.current.get(blockId)!;
+    }
+
+    // Priority 2: localStorage (survives refresh)
+    const storedEdits = getStoredEdits();
+    if (storedEdits && storedEdits.edits[blockId]) {
+      return storedEdits.edits[blockId];
+    }
+
+    // Priority 3: Original PDF text
+    return originalText;
+  }, []);
+
+  // ============================================================================
   // Save functionality
   // ============================================================================
 
-  // Manual save function - called via ref from parent
   const saveChanges = useCallback(async (): Promise<boolean> => {
     if (pendingSavesRef.current.size === 0 || isSavingRef.current) {
       return true;
@@ -202,7 +221,6 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
       const saveCallback = onBlockSaveRef.current;
       
       if (saveCallback) {
-        // Save all updates in parallel for better performance
         await Promise.all(updates.map(update => saveCallback(update)));
       }
 
@@ -219,7 +237,6 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
     }
   }, [handleError]);
 
-  // Queue a change for saving
   const queueBlockSave = useCallback((blockId: string, oldText: string, newText: string, section?: string) => {
     if (oldText === newText) return;
 
@@ -228,7 +245,6 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
     setHasPendingChanges(true);
   }, []);
 
-  // Auto-save functionality
   useEffect(() => {
     const autoSave = async () => {
       if (pendingSavesRef.current.size > 0 && !isSavingRef.current) {
@@ -236,7 +252,6 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
       }
     };
 
-    // Set up auto-save interval
     autoSaveTimerRef.current = setInterval(autoSave, AUTO_SAVE_INTERVAL);
 
     return () => {
@@ -246,18 +261,22 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
     };
   }, [saveChanges]);
 
-  // Expose methods via ref
+  // NEW: Expose current blocks state
+  const getCurrentBlocks = useCallback((): ResumeBlock[] => {
+    return Array.from(blocksByIdRef.current.values());
+  }, []);
+
   useImperativeHandle(ref, () => ({
     saveChanges,
     hasPendingChanges: () => pendingSavesRef.current.size > 0,
     getPendingChanges: () => Array.from(pendingSavesRef.current.values()),
-  }), [saveChanges]);
+    getCurrentBlocks, // NEW: Expose current state
+  }), [saveChanges, getCurrentBlocks]);
 
   // ============================================================================
-  // Event Delegation Handlers (Memory Optimized)
+  // Event Delegation Handlers
   // ============================================================================
 
-  // Get span and block from event target
   const getSpanAndBlock = useCallback((target: EventTarget | null): { span: HTMLSpanElement; block: ResumeBlock } | null => {
     if (!target) return null;
     const span = (target as Element).closest?.('.text-layer-span') as HTMLSpanElement | null;
@@ -267,8 +286,12 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
     return { span, block };
   }, []);
 
-  // Delegated keydown handler
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if (isLockedRef.current) {
+      e.preventDefault();
+      return;
+    }
+    
     const result = getSpanAndBlock(e.target);
     if (!result) return;
     const { span, block } = result;
@@ -290,8 +313,12 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
     }
   }, [getSpanAndBlock]);
 
-  // Delegated focus handler - minimal visual change like MS Word
   const handleFocus = useCallback((e: FocusEvent) => {
+    if (isLockedRef.current) {
+      (e.target as HTMLElement)?.blur();
+      return;
+    }
+    
     const result = getSpanAndBlock(e.target);
     if (!result) return;
     const { span, block } = result;
@@ -299,13 +326,11 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
     const currentText = span.textContent || '';
     originalTextRef.current.set(block.id, currentText);
     
-    // Show text when focused - always visible with white background
     span.style.color = '#1a1a1a';
     span.style.background = 'rgba(255, 255, 255, 1)';
     span.style.zIndex = '10';
   }, [getSpanAndBlock]);
 
-  // Delegated blur handler - saves changes on blur
   const handleBlur = useCallback((e: FocusEvent) => {
     const result = getSpanAndBlock(e.target);
     if (!result) return;
@@ -314,20 +339,18 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
     const newText = span.textContent || '';
     const originalText = originalTextRef.current.get(block.id) || block.text;
 
-    // Check if text changed
     const hasChanged = newText !== originalText;
     
-    // Save if text changed
     if (hasChanged) {
-      // Update local block text immediately to prevent re-render
       block.text = newText;
       block.isEdited = true;
+      
+      // Update both maps
+      blocksByIdRef.current.set(block.id, block);
       originalTextRef.current.set(block.id, newText);
       
-      // Set data attribute for CSS styling
       span.dataset.edited = 'true';
       
-      // Save to localStorage (survives refresh)
       saveEditsToStorage(
         [{ blockId: block.id, oldText: originalText, newText, section: block.section }],
         'current_resume',
@@ -335,17 +358,11 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
       );
       markEditsDirty();
       
-      // Queue for backend save
       queueBlockSave(block.id, originalText, newText, block.section);
       
-      // Notify parent for local state update
       onTextChangeRef.current?.(block.id, originalText, newText);
     }
 
-    // Visual state after blur:
-    // Edited blocks: ALWAYS visible with white background (hides canvas behind)
-    // Highlighted but not edited: show highlight, transparent text
-    // Otherwise: transparent to show canvas
     const highlighted = highlightedBlockIdsRef.current?.has(block.id);
     const isEdited = block.isEdited || hasChanged;
     
@@ -367,7 +384,6 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
     }
   }, [getSpanAndBlock, queueBlockSave]);
 
-  // Delegated paste handler (strip formatting)
   const handlePaste = useCallback((e: ClipboardEvent) => {
     const result = getSpanAndBlock(e.target);
     if (!result) return;
@@ -379,7 +395,6 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
     }
   }, [getSpanAndBlock]);
 
-  // Delegated mousedown handler (prevent multi-span selection)
   const handleMouseDown = useCallback((e: MouseEvent) => {
     const result = getSpanAndBlock(e.target);
     if (!result) return;
@@ -392,11 +407,10 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
   }, [getSpanAndBlock]);
 
   // ============================================================================
-  // Mutation Observer (for change tracking only, not ATS recalculation)
+  // Mutation Observer
   // ============================================================================
 
   const handleTextMutation = useCallback((mutations: MutationRecord[]) => {
-    // Skip if this is a programmatic change (e.g., undo/save)
     if (isProgrammaticChangeRef.current) return;
 
     for (const mutation of mutations) {
@@ -413,22 +427,16 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
 
         const newText = span.textContent || '';
         if (newText !== block.text) {
-          // Just track that this block has changed
           pendingChangesRef.current.add(block.id);
         }
       }
     }
 
-    // Clear any existing debounce timer
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
     }
-
-    // Don't trigger ATS recalculation while typing
-    // The user can manually click "Analyze" when they want to re-check
   }, []);
 
-  // Setup mutation observer
   const setupObserver = useCallback(() => {
     if (!textLayerRef.current) return;
 
@@ -452,14 +460,13 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
   }, [handleTextMutation]);
 
   // ============================================================================
-  // Setup Event Delegation on Text Layer
+  // Setup Event Delegation
   // ============================================================================
 
   useEffect(() => {
     const textLayer = textLayerRef.current;
     if (!textLayer) return;
 
-    // Add delegated event listeners to the container
     textLayer.addEventListener('keydown', handleKeyDown as EventListener);
     textLayer.addEventListener('focusin', handleFocus as EventListener);
     textLayer.addEventListener('focusout', handleBlur as EventListener);
@@ -476,7 +483,7 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
   }, [handleKeyDown, handleFocus, handleBlur, handlePaste, handleMouseDown]);
 
   // ============================================================================
-  // Main Render Function
+  // Main Render Function - FIXED: Uses resolved text from backend/localStorage
   // ============================================================================
 
   const renderPage = useCallback(async () => {
@@ -488,13 +495,11 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
 
     cancelCurrentRender();
 
-    // Race condition check
     if (currentRenderId !== renderIdRef.current) return;
 
     setRenderState('rendering');
 
     try {
-      // Load PDF document if needed
       if (!pdfDocRef.current || currentPdfUrlRef.current !== pdfUrl) {
         pdfDocRef.current?.destroy();
         currentPdfUrlRef.current = pdfUrl;
@@ -513,7 +518,6 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
         }
       }
 
-      // Race condition check
       if (currentRenderId !== renderIdRef.current) return;
 
       const pdf = pdfDocRef.current;
@@ -524,14 +528,12 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
 
       const page = await pdf.getPage(pageNumber);
       
-      // Race condition check
       if (currentRenderId !== renderIdRef.current) return;
 
       const viewport = page.getViewport({ scale });
       const canvas = canvasRef.current;
       const textLayer = textLayerRef.current;
 
-      // Setup canvas with device pixel ratio for sharp rendering
       const pixelRatio = window.devicePixelRatio || 1;
       canvas.width = viewport.width * pixelRatio;
       canvas.height = viewport.height * pixelRatio;
@@ -550,7 +552,6 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
       context.clearRect(0, 0, canvas.width, canvas.height);
       context.scale(pixelRatio, pixelRatio);
 
-      // PDF.js v5 render call
       renderTaskRef.current = page.render({
         canvasContext: context,
         viewport: viewport,
@@ -559,32 +560,26 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
       
       await renderTaskRef.current.promise;
 
-      // Race condition check
       if (currentRenderId !== renderIdRef.current) return;
       renderTaskRef.current = null;
 
-      // Get text content
       const textContent = await page.getTextContent();
       
-      // Race condition check
       if (currentRenderId !== renderIdRef.current) return;
 
-      // Save current text values before clearing
+      // CRITICAL FIX: Save current DOM state before clearing
       const savedTexts = new Map<string, string>();
       blockMapRef.current.forEach((block, span) => {
         const currentText = span.textContent || '';
-        if (currentText !== block.text) {
-          savedTexts.set(block.id, currentText);
-        }
+        savedTexts.set(block.id, currentText);
       });
 
-      // Clear existing text layer
       isProgrammaticChangeRef.current = true;
       textLayer.innerHTML = '';
       blockMapRef.current.clear();
+      blocksByIdRef.current.clear(); // NEW: Clear ID map
       isProgrammaticChangeRef.current = false;
 
-      // Create editable spans (no per-span event listeners - using delegation)
       const extractedBlocks: ResumeBlock[] = [];
       let sectionGuess = 'content';
 
@@ -600,7 +595,6 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
         const y = tx[5] - fontSize;
         const width = textItem.width * scale;
 
-        // Section detection heuristics
         const textLower = textItem.str.toLowerCase();
         if (textLower.includes('experience') || textLower.includes('work')) {
           sectionGuess = 'experience';
@@ -616,12 +610,19 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
 
         const blockId = `block-${pageNumber}-${index}`;
         
-        // Use saved text if available (preserves edits during re-render)
-        const textToUse = savedTexts.get(blockId) || textItem.str;
-        // Check if this block was previously edited
-        const wasEdited = savedTexts.has(blockId) || textToUse !== textItem.str;
+        // CRITICAL FIX: Multi-source text resolution
+        // Priority: current DOM > backend > localStorage > original PDF
+        let textToUse: string;
+        if (savedTexts.has(blockId)) {
+          // If we have current DOM state, use it (preserves unsaved edits)
+          textToUse = savedTexts.get(blockId)!;
+        } else {
+          // Otherwise, resolve from backend/localStorage/original
+          textToUse = getResolvedText(blockId, textItem.str);
+        }
         
-        // Parse font information using FontMapper
+        const wasEdited = textToUse !== textItem.str;
+        
         const fontInfo = getFontInfo(textItem.fontName || 'sans-serif');
         const fontStyles = buildFontStyles(fontInfo, fontSize);
         
@@ -637,7 +638,6 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
           isEdited: wasEdited,
         };
 
-        // Create editable span (NO per-span event listeners)
         const span = document.createElement('span');
         span.className = 'text-layer-span';
         span.contentEditable = 'true';
@@ -647,22 +647,16 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
         span.dataset.section = block.section;
         span.dataset.fontName = textItem.fontName || 'sans-serif';
         
-        // Set data-edited attribute for CSS styling persistence
         if (wasEdited) {
           span.dataset.edited = 'true';
         }
 
-        // Accessibility
         span.setAttribute('role', 'textbox');
         span.setAttribute('aria-label', `Editable text in ${block.section} section`);
         span.setAttribute('tabindex', '0');
 
-        // Only highlight blocks with issues (from analysis)
         const isHighlighted = highlightedBlockIds?.has(block.id);
         
-        // Determine visibility based on edit state
-        // Edited blocks: ALWAYS visible (white bg, visible text) to hide canvas text beneath
-        // Non-edited blocks: transparent text, shows canvas through
         const textColor = wasEdited ? '#1a1a1a' : 'transparent';
         const bgColor = wasEdited 
           ? 'rgba(255, 255, 255, 1)' 
@@ -698,10 +692,10 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
         `;
 
         blockMapRef.current.set(span, block);
+        blocksByIdRef.current.set(block.id, block); // NEW: Store by ID
         extractedBlocks.push(block);
         textLayer.appendChild(span);
         
-        // Restore original text to memory
         originalTextRef.current.set(block.id, textToUse);
       });
 
@@ -710,19 +704,40 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
       setRenderState('complete');
 
     } catch (err) {
-      // Ignore cancellation errors
       if (err instanceof Error && err.name === 'RenderingCancelledException') {
         return;
       }
       handleError(err instanceof Error ? err : new Error('Render failed'), 'render');
       setRenderState('error');
     }
-  }, [pdfUrl, pageNumber, scale, cancelCurrentRender, setupObserver, highlightedBlockIds, onBlocksExtracted, handleError]);
+  }, [pdfUrl, pageNumber, scale, cancelCurrentRender, setupObserver, highlightedBlockIds, onBlocksExtracted, handleError, getResolvedText]);
 
-  // Render on mount and dependency changes
+  // CRITICAL: Only re-render when these specific dependencies change
+  // DO NOT include updatedBlocks here to prevent re-render after analysis
   useEffect(() => {
     renderPage();
-  }, [renderPage]);
+  }, [pdfUrl, pageNumber, scale]); // Removed: renderPage, highlightedBlockIds
+
+  // NEW: Separate effect to update highlights without re-rendering
+  useEffect(() => {
+    if (!textLayerRef.current || renderState !== 'complete') return;
+
+    // Update highlights on existing spans without re-rendering
+    blockMapRef.current.forEach((block, span) => {
+      const isHighlighted = highlightedBlockIds?.has(block.id);
+      const isEdited = block.isEdited;
+
+      if (isEdited) {
+        span.style.boxShadow = isHighlighted ? 'inset 0 -2px 0 0 #f59e0b' : 'none';
+      } else if (isHighlighted) {
+        span.style.background = 'rgba(245, 158, 11, 0.15)';
+        span.style.boxShadow = 'inset 0 -2px 0 0 #f59e0b';
+      } else {
+        span.style.background = 'transparent';
+        span.style.boxShadow = 'none';
+      }
+    });
+  }, [highlightedBlockIds, renderState]);
 
   // ============================================================================
   // Canvas Context Loss Handling
@@ -751,12 +766,11 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
   }, [renderPage]);
 
   // ============================================================================
-  // Cleanup on Unmount
+  // Cleanup
   // ============================================================================
 
   useEffect(() => {
     return () => {
-      // Increment render ID to invalidate any in-flight renders
       renderIdRef.current++;
       cancelCurrentRender();
       
@@ -786,7 +800,6 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
       aria-label="PDF Document Editor"
       className="relative bg-white shadow-2xl ring-1 ring-gray-300"
     >
-      {/* Viewport Container - Exact PDF dimensions */}
       <div
         ref={viewportRef}
         className="relative"
@@ -795,7 +808,6 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
           height: dimensions?.height || 'auto',
         }}
       >
-        {/* Unsaved changes indicator */}
         {hasPendingChanges && (
           <div className="absolute -top-2 -right-2 z-50">
             <div className="flex items-center gap-2 bg-amber-50 text-amber-700 border border-amber-200 px-3 py-1.5 rounded-full text-xs font-medium shadow-lg">
@@ -805,7 +817,6 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
           </div>
         )}
 
-        {/* Loading state */}
         {renderState === 'rendering' && (
           <div className="absolute inset-0 flex items-center justify-center bg-white/95 z-30">
             <div className="flex flex-col items-center">
@@ -815,7 +826,6 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
           </div>
         )}
 
-        {/* Error state */}
         {renderState === 'error' && (
           <div className="absolute inset-0 flex items-center justify-center bg-gray-50 z-30">
             <div className="text-center p-6">
@@ -825,7 +835,6 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
           </div>
         )}
 
-        {/* PDF canvas - renders the visual PDF */}
         <canvas
           ref={canvasRef}
           className="block"
@@ -834,7 +843,6 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
           }}
         />
 
-        {/* Editable text layer - positioned exactly over canvas */}
         <div
           ref={textLayerRef}
           className="absolute top-0 left-0 textLayer"
@@ -844,7 +852,7 @@ const DocumentCanvas = memo(forwardRef<DocumentCanvasRef, DocumentCanvasProps>(f
             opacity: renderState === 'complete' ? 1 : 0,
             transition: 'opacity 0.2s ease-in-out',
             pointerEvents: 'auto',
-            color: 'transparent', /* Text is invisible, PDF shows through */
+            color: 'transparent',
           }}
         />
       </div>

@@ -1,9 +1,9 @@
 {
   "block-1-96": {
-    "text": "Organized organizing technical workshops and hackathons to promote student innovation.",
+    "text": "Organized technical workshops and hackathons to promote student innovation.",
     "oldText": "Assisted in organizing technical workshops and hackathons to promote student innovation.",
     "section": "experience",
-    "updated_at": "Fri Feb  6 08:54:58 +0545 2026"
+    "updated_at": "Fri Feb  6 13:04:50 +0545 2026"
   },
   "ff047ca1-a15d-4584-ac0d-2c4738f17f10": {
     "text": "Motivated Casomputer Science undergraduate at Kathmandu University (GPA: 3.59) with a strong foundation",
@@ -16,5 +16,29 @@
     "oldText": "into deployable solutions — from full-stack restaurant systems to sign-language recognition models. Passionate",
     "section": "skills",
     "updated_at": "Thu Feb  5 11:07:12 +0545 2026"
+  },
+  "a6dca685-0f34-4da2-bcef-f4f318422eb3": {
+    "text": "Axc Computer Science undergraduate at Kathmandu University (GPA: 3.59) with a strong foundation",
+    "oldText": "Motivated Computer Science undergraduate at Kathmandu University (GPA: 3.59) with a strong foundation",
+    "section": "summary",
+    "updated_at": "Fri Feb  6 12:38:33 +0545 2026"
+  },
+  "block-1-62": {
+    "text": "Conducted data preprocessing, exploratory data analysis, and feature engineerin g.",
+    "oldText": "Conducted data preprocessing, exploratory data analysis, and feature engineering.",
+    "section": "experience",
+    "updated_at": "Fri Feb  6 13:22:46 +0545 2026"
+  },
+  "block-1-100": {
+    "text": "Kathmandu University, 2025",
+    "oldText": "Kathmandu University, 2024",
+    "section": "experience",
+    "updated_at": "Fri Feb  6 14:44:56 +0545 2026"
+  },
+  "block-1-92": {
+    "text": "Kathmandu University, 2025",
+    "oldText": "Kathmandu University, 2024",
+    "section": "experience",
+    "updated_at": "Fri Feb  6 14:45:07 +0545 2026"
   }
 }

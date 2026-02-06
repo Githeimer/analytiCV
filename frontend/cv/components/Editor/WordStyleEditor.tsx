@@ -37,6 +37,7 @@ interface WordStyleEditorProps {
   weakBlocks: Map<string, BlockWeakness>;
   scale: number;
   currentPage: number;
+  isAnalyzing?: boolean;
   onTextChange?: (blockId: string, oldText: string, newText: string) => void;
   onBlockSave?: (update: BlockUpdate) => Promise<void>;
   onATSRecalculate?: () => void;
@@ -52,6 +53,7 @@ const WordStyleEditor = memo(forwardRef<DocumentCanvasRef, WordStyleEditorProps>
   weakBlocks,
   scale,
   currentPage,
+  isAnalyzing = false,
   onTextChange,
   onBlockSave,
   onATSRecalculate,
@@ -345,6 +347,7 @@ const WordStyleEditor = memo(forwardRef<DocumentCanvasRef, WordStyleEditorProps>
           pdfUrl={pdfUrl}
           pageNumber={currentPage + 1}
           scale={scale}
+          isLocked={isAnalyzing}
           onBlocksExtracted={handleBlocksExtracted}
           onTextChange={handleTextChange}
           onBlockSave={handleBlockSave}

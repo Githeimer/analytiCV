@@ -1,8 +1,13 @@
 /**
- * API service for the PDF inline editor - FINAL FIXED VERSION
+ * API service for the PDF inline editor - FIXED VERSION
+ * 
+ * CRITICAL FIX: analyzeBlocks now merges saved edits before analysis
+ * - This ensures the backend analyzes the CURRENT state, not the original PDF
+ * - Prevents UI reversion after clicking "Analyze"
  * 
  * Key Improvements:
  * - Merges saved edits when extracting PDF blocks
+ * - Merges saved edits BEFORE sending to analyze endpoint
  * - Better error handling with retry logic
  * - Request deduplication to prevent duplicate saves
  * - Proper timeout handling
@@ -21,10 +26,8 @@ import {
   getStoredEdits,
 } from '@/utils/editorStorage';
 
-// Use Next.js process.env for environment variables
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-// Conditional logging helper
 const isDev = process.env.NODE_ENV === 'development';
 const log = (...args: unknown[]) => {
   if (isDev) {
@@ -90,13 +93,12 @@ export async function extractPDFBlocks(file: File): Promise<PDFExtractionResult>
       if (Object.keys(savedEdits).length > 0) {
         log(`Found ${Object.keys(savedEdits).length} saved edits, merging...`);
         
-        // Step 3: Merge saved edits with original blocks
         result.data.blocks = result.data.blocks.map((block: TextBlock) => {
           if (savedEdits[block.id]) {
             log(`  Applying saved edit to block ${block.id}`);
             return {
               ...block,
-              text: savedEdits[block.id]  // Use saved text instead of original
+              text: savedEdits[block.id]
             };
           }
           return block;
@@ -109,20 +111,82 @@ export async function extractPDFBlocks(file: File): Promise<PDFExtractionResult>
     }
   } catch (err) {
     log('⚠️ Could not load saved edits (continuing with original text):', err);
-    // Continue with original text if can't load edits
   }
 
   return result.data;
 }
 
 /**
+ * CRITICAL FIX: Merge saved edits into blocks before analysis
+ * This ensures the backend analyzes the CURRENT state, not the original PDF
+ */
+async function mergeCurrentEditsIntoBlocks(blocks: TextBlock[]): Promise<TextBlock[]> {
+  log('Merging current edits into blocks before analysis...');
+  
+  // Priority 1: localStorage (dirty, unsaved edits)
+  const storedEdits = getStoredEdits();
+  if (storedEdits && storedEdits.isDirty && Object.keys(storedEdits.edits).length > 0) {
+    log(`Found ${Object.keys(storedEdits.edits).length} dirty localStorage edits`);
+    const mergedBlocks = blocks.map(block => {
+      if (storedEdits.edits[block.id]) {
+        log(`  Applying localStorage edit to block ${block.id}: "${block.text}" -> "${storedEdits.edits[block.id]}"`);
+        return {
+          ...block,
+          text: storedEdits.edits[block.id],
+        };
+      }
+      return block;
+    });
+    log('✅ Merged localStorage edits into blocks for analysis');
+    return mergedBlocks;
+  }
+
+  // Priority 2: Backend saved edits (synced)
+  try {
+    const editsResponse = await fetch(`${API_BASE_URL}/api/get-edits/current_resume`);
+    if (editsResponse.ok) {
+      const editsData = await editsResponse.json();
+      const savedEdits = editsData.edits || {};
+      
+      if (Object.keys(savedEdits).length > 0) {
+        log(`Found ${Object.keys(savedEdits).length} backend saved edits`);
+        const mergedBlocks = blocks.map(block => {
+          if (savedEdits[block.id]) {
+            log(`  Applying backend edit to block ${block.id}: "${block.text}" -> "${savedEdits[block.id]}"`);
+            return {
+              ...block,
+              text: savedEdits[block.id],
+            };
+          }
+          return block;
+        });
+        log('✅ Merged backend edits into blocks for analysis');
+        return mergedBlocks;
+      }
+    }
+  } catch (err) {
+    log('⚠️ Could not fetch saved edits for analysis merge:', err);
+  }
+
+  // Priority 3: Original blocks (no edits found)
+  log('No saved edits found, using original blocks for analysis');
+  return blocks;
+}
+
+/**
  * Analyze blocks for weaknesses and get improvement suggestions
+ * CRITICAL FIX: Now merges saved edits BEFORE sending to backend
  */
 export async function analyzeBlocks(
   blocks: TextBlock[],
   jobDescription?: string
 ): Promise<AnalysisResult> {
-  log('Analyzing', blocks.length, 'blocks');
+  log('analyzeBlocks called with', blocks.length, 'blocks');
+  
+  // CRITICAL: Merge current edits into blocks before analysis
+  const blocksWithEdits = await mergeCurrentEditsIntoBlocks(blocks);
+  
+  log('Sending blocks to backend for analysis (with merged edits)');
   
   const response = await fetch(`${API_BASE_URL}/api/analyze-blocks`, {
     method: 'POST',
@@ -130,7 +194,7 @@ export async function analyzeBlocks(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      blocks,
+      blocks: blocksWithEdits,  // Send blocks WITH edits applied
       job_description: jobDescription,
     }),
   });
@@ -212,7 +276,6 @@ export interface SaveError {
   details?: string;
 }
 
-// Type guard for SaveError
 function isSaveError(error: unknown): error is SaveError {
   return (
     typeof error === 'object' &&
@@ -222,7 +285,6 @@ function isSaveError(error: unknown): error is SaveError {
   );
 }
 
-// Request deduplication map - prevents duplicate saves
 const pendingRequests = new Map<string, Promise<UpdateResumeResponse>>();
 
 /**
@@ -252,7 +314,6 @@ export async function updateResumeBlocks(
   
   log('updateResumeBlocks called with', blocks.length, 'block(s)');
   
-  // Validate input before making request
   if (!blocks || blocks.length === 0) {
     log('No blocks to save, returning early');
     return {
@@ -261,7 +322,6 @@ export async function updateResumeBlocks(
     };
   }
 
-  // Check for duplicate request
   const requestKey = getRequestKey(blocks);
   const existingRequest = pendingRequests.get(requestKey);
   if (existingRequest) {
@@ -291,7 +351,6 @@ export async function updateResumeBlocks(
       log('Response status:', response.status);
 
       if (!response.ok) {
-        // Try to parse error response
         let errorMessage = 'Failed to save changes';
         let errorCode: SaveError['code'] = 'SERVER_ERROR';
         
@@ -299,7 +358,6 @@ export async function updateResumeBlocks(
           const errorData = await response.json();
           errorMessage = errorData.detail || errorData.message || errorMessage;
         } catch {
-          // Response body not JSON, use status text
           errorMessage = response.statusText || errorMessage;
         }
 
@@ -324,7 +382,6 @@ export async function updateResumeBlocks(
       log('Save successful:', result);
       
       // Sync to localStorage after successful API save
-      // This marks the edits as "synced" (not dirty)
       saveEditsToStorage(blocks, 'current_resume', false);
       markEditsSynced();
       
@@ -333,7 +390,6 @@ export async function updateResumeBlocks(
     } catch (error: unknown) {
       clearTimeout(timeoutId);
 
-      // Handle abort/timeout
       if (error instanceof Error && error.name === 'AbortError') {
         const saveError: SaveError = {
           message: 'Request timed out. Please try again.',
@@ -342,11 +398,9 @@ export async function updateResumeBlocks(
         throw saveError;
       }
 
-      // Handle network errors with retry
       if (error instanceof TypeError) {
         if (retry > 0) {
           log(`Network error, retrying... (${retry} attempts left)`);
-          // Wait a bit before retrying
           await new Promise(resolve => setTimeout(resolve, 1000));
           return updateResumeBlocks(blocks, { retry: retry - 1, timeout });
         }
@@ -358,24 +412,20 @@ export async function updateResumeBlocks(
         throw saveError;
       }
 
-      // Re-throw SaveError as-is
       if (isSaveError(error)) {
         throw error;
       }
 
-      // Unknown error
       const saveError: SaveError = {
         message: error instanceof Error ? error.message : 'An unexpected error occurred',
         code: 'UNKNOWN_ERROR',
       };
       throw saveError;
     } finally {
-      // Clean up pending request
       pendingRequests.delete(requestKey);
     }
   })();
 
-  // Store the promise to deduplicate concurrent requests
   pendingRequests.set(requestKey, requestPromise);
 
   return requestPromise;
@@ -388,7 +438,6 @@ export async function updateResumeBlocks(
 export async function batchUpdateBlocks(
   blocks: BlockUpdate[]
 ): Promise<UpdateResumeResponse> {
-  // Filter out blocks where text did not actually change
   const validBlocks = blocks.filter(
     (block) => block.oldText !== block.newText && block.newText.trim().length > 0
   );
