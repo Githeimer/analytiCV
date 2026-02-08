@@ -250,6 +250,7 @@ async def analyze_blocks(request: AnalyzeBlocksRequest):
             if weakness:
                 weak_blocks.append({
                     'id': block_id,
+                    'section': section,  # Include section for UI display
                     'issue': weakness['issue'],
                     'suggestion': weakness['suggestion'],
                     'severity': weakness['severity'],

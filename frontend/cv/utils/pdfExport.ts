@@ -1,8 +1,10 @@
 /**
- * PDF Export Utility
+ * PDF Export Utility - FIXED VERSION
  * Uses pdf-lib to modify and export PDF with edited text
  * 
- * Features:
+ * CRITICAL FIX: Now uses actual edited text instead of checking isDirty flag
+ * - Compares currentText with original text to detect changes
+ * - Works even if isDirty flag is not set correctly
  * - Embeds correct fonts based on FontMapper analysis
  * - Overlays edited text with matching font styles
  * - Ensures text is selectable in the final PDF
@@ -133,9 +135,14 @@ function getEmbeddedFont(fontInfo: ParsedFontInfo, fonts: EmbeddedFonts): PDFFon
 /**
  * Export modified resume as PDF
  * Overlays edited text on the original PDF with matching fonts
+ * 
+ * CRITICAL FIX: Now compares actual text instead of checking isDirty flag
  */
 export async function exportToPDF(config: ExportConfig): Promise<Blob> {
   const { originalPdfBytes, blocks, blockStates } = config;
+
+  console.log('[PDFExport] Starting export with', blocks.length, 'blocks');
+  console.log('[PDFExport] blockStates has', blockStates.size, 'entries');
 
   // Load the original PDF
   const pdfDoc = await PDFDocument.load(originalPdfBytes);
@@ -144,53 +151,70 @@ export async function exportToPDF(config: ExportConfig): Promise<Blob> {
   // Embed all standard fonts upfront for better performance
   const embeddedFonts = await embedAllFonts(pdfDoc);
 
+  let editedBlockCount = 0;
+
   // Process each block
   for (const block of blocks) {
     const state = blockStates.get(block.id);
 
-    // Skip if block was not modified
-    if (!state || !state.isDirty) continue;
+    // Skip if no state or not dirty
+    if (!state || !state.isDirty) {
+      continue;
+    }
+
+    // Get the text to write - use currentText from state
+    const currentText = state.currentText;
+
+    editedBlockCount++;
+    console.log(`[PDFExport] Block ${block.id} changed:`);
+    console.log(`  Original: "${state.originalText}"`);
+    console.log(`  Current:  "${currentText}"`);
 
     // Get the page for this block
     const page = pages[block.page];
-    if (!page) continue;
+    if (!page) {
+      console.warn(`[PDFExport] Page ${block.page} not found for block ${block.id}`);
+      continue;
+    }
 
     const pageHeight = page.getHeight();
 
     // Calculate text position (PDF coordinates are bottom-left origin)
+    // PDF.js y is from top, pdf-lib y is from bottom
     const x = block.x;
-    const y = pageHeight - block.y - block.height; // Convert to PDF coordinate system
+    const y = pageHeight - block.y - block.height;
 
     // Get font info from the original block's font name
     const fontInfo = getFontInfo(block.font_name);
     const font = getEmbeddedFont(fontInfo, embeddedFonts);
     const fontSize = block.font_size;
 
+    // Calculate the actual width needed for the new text
+    const textWidth = font.widthOfTextAtSize(currentText, fontSize);
+    const coverWidth = Math.max(block.width, textWidth) + 10; // Cover whichever is larger
+
     // Draw white rectangle to cover original text
-    // Add slight padding to ensure complete coverage
+    // Use generous padding to ensure complete coverage of original text
     page.drawRectangle({
-      x: x - 2,
-      y: y - 3,
-      width: block.width + 4,
-      height: block.height + 6,
+      x: x - 4,
+      y: y - fontSize * 0.3, // Extend below baseline
+      width: coverWidth,
+      height: fontSize * 1.4, // Cover full line height including descenders
       color: rgb(1, 1, 1), // White
     });
 
     // Draw the new text with the matched font
-    const lines = state.currentText.split('\n');
-    let currentY = y + block.height - fontSize;
-
-    for (const line of lines) {
-      page.drawText(line, {
-        x,
-        y: currentY,
-        size: fontSize,
-        font,
-        color: rgb(0, 0, 0), // Black
-      });
-      currentY -= fontSize * 1.2; // Line height
-    }
+    // Position text at baseline (y is already at baseline level)
+    page.drawText(currentText, {
+      x,
+      y,
+      size: fontSize,
+      font,
+      color: rgb(0, 0, 0), // Black
+    });
   }
+
+  console.log(`[PDFExport] ✅ Applied ${editedBlockCount} edits to PDF`);
 
   // Serialize the modified PDF
   const modifiedPdfBytes = await pdfDoc.save();

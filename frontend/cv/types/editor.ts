@@ -72,6 +72,7 @@ export interface PDFExtractionResult {
 // Weakness analysis for a block
 export interface BlockWeakness {
   id: string;
+  section?: string;  // Section name for display
   issue: string;
   suggestion: string;
   severity: 'low' | 'medium' | 'high';

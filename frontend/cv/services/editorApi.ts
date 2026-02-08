@@ -175,18 +175,14 @@ async function mergeCurrentEditsIntoBlocks(blocks: TextBlock[]): Promise<TextBlo
 
 /**
  * Analyze blocks for weaknesses and get improvement suggestions
- * CRITICAL FIX: Now merges saved edits BEFORE sending to backend
+ * Blocks should already contain the current edited text from DocumentCanvas
  */
 export async function analyzeBlocks(
-  blocks: TextBlock[],
+  blocks: Array<{id: string; text: string; block_type?: string; section?: string}>,
   jobDescription?: string
 ): Promise<AnalysisResult> {
   log('analyzeBlocks called with', blocks.length, 'blocks');
-  
-  // CRITICAL: Merge current edits into blocks before analysis
-  const blocksWithEdits = await mergeCurrentEditsIntoBlocks(blocks);
-  
-  log('Sending blocks to backend for analysis (with merged edits)');
+  log('Sample block:', blocks[0]);
   
   const response = await fetch(`${API_BASE_URL}/api/analyze-blocks`, {
     method: 'POST',
@@ -194,7 +190,7 @@ export async function analyzeBlocks(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      blocks: blocksWithEdits,  // Send blocks WITH edits applied
+      blocks,  // Blocks already have current edited text
       job_description: jobDescription,
     }),
   });

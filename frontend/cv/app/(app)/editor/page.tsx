@@ -1,21 +1,3 @@
-/**
- * PDF Inline Editor Page - FIXED VERSION
- * Document-style inline editor with professional document editing environment
- * 
- * CRITICAL FIX: Sequential Save-Then-Analyze Flow
- * - Step 1: Force save all pending changes
- * - Step 2: Get current blocks from DocumentCanvas (not stale state)
- * - Step 3: Send current blocks to backend for analysis
- * - Step 4: Update ONLY analysis UI (no PDF re-render)
- * 
- * Key Improvements:
- * - Fixed auto-refresh issue - changes no longer trigger page reload
- * - Manual "Analyze" button for ATS recalculation
- * - Auto-save functionality with visual feedback
- * - Better error handling and recovery
- * - Optimized re-rendering prevention
- */
-
 'use client';
 
 import { useState, useCallback, useRef, useEffect } from 'react';
@@ -63,6 +45,7 @@ function EditorLoadingSkeleton() {
 
 import { extractPDFBlocks, analyzeBlocks, updateResumeBlocks } from '@/services/editorApi';
 import type { BlockUpdate, ATSScoreDetails } from '@/services/editorApi';
+import type { EditableBlockState, TextBlock, SectionType } from '@/types/editor';
 import { exportToPDF, downloadPDF, fileToArrayBuffer } from '@/utils/pdfExport';
 import type { DocumentCanvasRef } from '@/components/Editor/WordStyleEditor';
 
@@ -196,32 +179,54 @@ export default function EditorPage() {
       }
 
       // STEP 2: Get CURRENT blocks from DocumentCanvas (not stale state)
-      // This is the actual current state of the editor, including all edits
+      // These are the actual edited blocks with their current text
       console.log('[EditorPage] Step 2: Getting current blocks from DocumentCanvas...');
       const currentBlocks = editorRef.current.getCurrentBlocks();
       console.log('[EditorPage] Current blocks count:', currentBlocks.length);
       
-      // Map DocumentCanvas blocks back to extraction result format
-      // The DocumentCanvas uses `block-${pageNumber}-${index}` IDs
-      // We need to map these back to the original extraction block IDs
-      const blocksForAnalysis = state.extractionResult.blocks.map((originalBlock, index) => {
-        // Find the corresponding current block by index
-        const currentBlock = currentBlocks.find(cb => {
-          const spanIndex = parseInt(cb.id.split('-').pop() || '0');
-          return spanIndex === index;
+      // Build a section lookup from extraction result's sections map
+      // This gives us accurate section info from PyMuPDF's analysis
+      const sectionLookup = new Map<string, string>();
+      if (state.extractionResult?.sections) {
+        Object.entries(state.extractionResult.sections).forEach(([sectionName, blocks]) => {
+          blocks.forEach(block => {
+            // Store section by original text (normalized) for fuzzy matching
+            const normalizedText = block.text.trim().toLowerCase().substring(0, 100);
+            sectionLookup.set(normalizedText, sectionName);
+          });
         });
+      }
+      
+      // Convert DocumentCanvas blocks to the format expected by analyzeBlocks
+      // Use current edited text from DocumentCanvas, but section info from extraction result
+      const blocksForAnalysis = currentBlocks.map(cb => {
+        // Try to find section by matching text content
+        const normalizedText = cb.text.trim().toLowerCase().substring(0, 100);
+        let section = sectionLookup.get(normalizedText);
         
-        if (currentBlock) {
-          console.log(`[EditorPage] Block ${index}: Using current text: "${currentBlock.text}"`);
-          return {
-            ...originalBlock,
-            text: currentBlock.text, // Use the CURRENT edited text
-          };
+        // If no exact match, try to find by partial match
+        if (!section) {
+          for (const [key, sec] of sectionLookup.entries()) {
+            if (normalizedText.includes(key.substring(0, 50)) || key.includes(normalizedText.substring(0, 50))) {
+              section = sec;
+              break;
+            }
+          }
         }
         
-        console.log(`[EditorPage] Block ${index}: Using original text: "${originalBlock.text}"`);
-        return originalBlock;
+        // Use DocumentCanvas section guess as fallback
+        section = section || cb.section || 'other';
+        
+        return {
+          id: cb.id,
+          text: cb.text,
+          block_type: 'paragraph',
+          section,
+        };
       });
+      
+      console.log('[EditorPage] Blocks for analysis:', blocksForAnalysis.length);
+      console.log('[EditorPage] Sections found:', [...new Set(blocksForAnalysis.map(b => b.section))].join(', '));
       
       console.log('[EditorPage] Step 3: Sending blocks to backend for analysis...');
       console.log('[EditorPage] Sample block texts:', blocksForAnalysis.slice(0, 3).map(b => b.text));
@@ -255,10 +260,10 @@ export default function EditorPage() {
 
   // Handle export button click
   const handleExport = useCallback(async () => {
-    if (!state.extractionResult || !pdfBytesRef.current) return;
+    if (!state.extractionResult || !pdfBytesRef.current || !editorRef.current) return;
 
     // Auto-save before export
-    if (hasPendingChanges && editorRef.current) {
+    if (hasPendingChanges) {
       setIsSaving(true);
       try {
         await editorRef.current.saveChanges();
@@ -280,10 +285,72 @@ export default function EditorPage() {
     setError(null);
 
     try {
+      // Get current blocks from DocumentCanvas - these have the edited text already
+      const currentBlocks = editorRef.current.getCurrentBlocks();
+      
+      // Filter to only edited blocks and convert to TextBlock format for pdfExport
+      const editedBlocks: TextBlock[] = [];
+      const exportBlockStates = new Map<string, EditableBlockState>();
+      
+      // Parse page number from block ID (format: "block-{pageNumber}-{index}")
+      // pageNumber in DocumentCanvas is 1-indexed (PDF.js), but pdfExport expects 0-indexed
+      const getPageFromBlockId = (blockId: string): number => {
+        const parts = blockId.split('-');
+        const pdfJsPageNum = parts.length >= 2 ? parseInt(parts[1], 10) : 1;
+        return pdfJsPageNum - 1; // Convert to 0-indexed for pdf-lib
+      };
+      
+      currentBlocks.forEach(cb => {
+        if (cb.isEdited) {
+          // Convert ResumeBlock to TextBlock format expected by pdfExport
+          const textBlock: TextBlock = {
+            id: cb.id,
+            text: cb.text,
+            x: cb.x,
+            y: cb.y,
+            width: cb.width,
+            height: cb.height,
+            page: getPageFromBlockId(cb.id),
+            font_size: cb.fontSize,
+            font_name: cb.fontFamily,
+            block_type: 'paragraph',
+            section: (cb.section as SectionType) || null,
+          };
+          
+          editedBlocks.push(textBlock);
+          
+          // Create block state with isDirty = true for edited blocks
+          exportBlockStates.set(cb.id, {
+            id: cb.id,
+            currentText: cb.text,
+            originalText: '', // We don't need original text since isDirty is true
+            isEditing: false,
+            isDirty: true,
+            weakness: null,
+          });
+        }
+      });
+      
+      console.log('[Export] Found', editedBlocks.length, 'edited blocks to export');
+      
+      if (editedBlocks.length === 0) {
+        console.log('[Export] No edits to export, downloading original PDF');
+        // If no edits, just download the original
+        const blob = new Blob([pdfBytesRef.current], { type: 'application/pdf' });
+        const filename = state.pdfFile?.name || 'resume.pdf';
+        downloadPDF(blob, filename);
+        setExporting(false);
+        return;
+      }
+      
+      editedBlocks.forEach(b => {
+        console.log(`[Export] Block ${b.id} (page ${b.page}): "${b.text.substring(0, 50)}..."`);
+      });
+
       const blob = await exportToPDF({
         originalPdfBytes: pdfBytesRef.current,
-        blocks: state.extractionResult.blocks,
-        blockStates: state.blocks,
+        blocks: editedBlocks,  // Only edited blocks, with correct coordinates
+        blockStates: exportBlockStates,
         filename: state.pdfFile?.name || 'resume.pdf',
       });
 
@@ -311,15 +378,13 @@ export default function EditorPage() {
     console.log('[EditorPage] handleBlockSave called with:', update);
     
     try {
-      // Map the DocumentCanvas block ID back to the extraction result block ID
-      const spanIndex = parseInt(update.blockId.split('-').pop() || '0');
-      const extractionBlock = state.extractionResult?.blocks[spanIndex];
-      
+      // Use the DocumentCanvas block ID directly
+      // The backend will store edits by this ID consistently
       const backendUpdate: BlockUpdate = {
-        blockId: extractionBlock?.id || update.blockId,
+        blockId: update.blockId,  // Use DocumentCanvas ID as-is
         oldText: update.oldText,
         newText: update.newText,
-        section: update.section || extractionBlock?.section || undefined,
+        section: update.section || undefined,
       };
 
       console.log('[EditorPage] Sending to backend:', backendUpdate);
@@ -351,7 +416,7 @@ export default function EditorPage() {
       console.error('[EditorPage] Failed to save block:', error);
       throw error;
     }
-  }, [state.extractionResult?.blocks]);
+  }, []);
 
   // Handle block selection
   const handleBlockSelect = useCallback(
@@ -894,7 +959,8 @@ export default function EditorPage() {
                   ) : (
                     <div className="divide-y divide-gray-100">
                       {weakBlocksArray.map((issue) => {
-                        const block = state.extractionResult?.blocks.find((b) => b.id === issue.blockId);
+                        // Section is now included directly in the weak block response
+                        const sectionName = issue.section || 'content';
                         return (
                           <div
                             key={issue.blockId}
@@ -918,7 +984,7 @@ export default function EditorPage() {
                               />
                               <div className="flex-1 min-w-0">
                                 <p className="text-xs text-gray-500 capitalize mb-1">
-                                  {block?.section || 'Unknown'} section
+                                  {sectionName} section
                                 </p>
                                 <p className="text-sm font-medium text-gray-900 mb-1">
                                   {issue.issue}

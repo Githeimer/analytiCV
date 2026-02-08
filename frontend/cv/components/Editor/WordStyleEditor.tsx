@@ -1,26 +1,9 @@
-/**
- * WordStyleEditor Component - FIXED VERSION
- * MS Word-style document editor wrapper
- * 
- * FIXES APPLIED:
- * - Block ID mapping architecture redesigned
- * - Error handling for DocumentCanvas
- * - Memory leak prevention (changesMapRef cleanup)
- * - Type safety improvements
- * - Page boundary validation
- * - Loading state management
- * - Accessibility enhancements
- * - Scale change handling
- * - Dynamic highlight updates
- */
-
 'use client';
 
 import { memo, useCallback, useMemo, useState, useRef, useEffect, forwardRef } from 'react';
 import DocumentCanvas, { type ResumeBlock, type BlockUpdate, type DocumentCanvasRef } from './DocumentCanvas';
 import type { PDFExtractionResult, BlockWeakness } from '@/types/editor';
 
-// Constants for A4 paper dimensions
 const A4_DIMENSIONS = {
   WIDTH_MM: 210,
   HEIGHT_MM: 297,
@@ -28,7 +11,6 @@ const A4_DIMENSIONS = {
   MM_TO_INCH: 25.4,
 } as const;
 
-// Re-export types for parent components
 export type { DocumentCanvasRef } from './DocumentCanvas';
 
 interface WordStyleEditorProps {
@@ -38,6 +20,7 @@ interface WordStyleEditorProps {
   scale: number;
   currentPage: number;
   isAnalyzing?: boolean;
+  updatedBlocks?: Map<string, string>; 
   onTextChange?: (blockId: string, oldText: string, newText: string) => void;
   onBlockSave?: (update: BlockUpdate) => Promise<void>;
   onATSRecalculate?: () => void;
@@ -54,6 +37,7 @@ const WordStyleEditor = memo(forwardRef<DocumentCanvasRef, WordStyleEditorProps>
   scale,
   currentPage,
   isAnalyzing = false,
+  updatedBlocks, // NEW: Receive updatedBlocks from parent
   onTextChange,
   onBlockSave,
   onATSRecalculate,
@@ -88,31 +72,18 @@ const WordStyleEditor = memo(forwardRef<DocumentCanvasRef, WordStyleEditorProps>
     return currentPage >= 0 && currentPage < totalPages;
   }, [currentPage, extractionResult.metadata]);
 
-  // FIX #1: Build highlighted block IDs with proper mapping
+  // FIX #1: Build highlighted block IDs directly from weakBlocks
+  // Since analysis now returns DocumentCanvas IDs, we can use them directly
   const highlightedBlockIds = useMemo(() => {
     const ids = new Set<string>();
     
-    // Get blocks for current page only from extraction result
-    const currentPageBlocks = extractionResult.blocks?.filter(
-      block => block.page === currentPage
-    ) || [];
-    
-    weakBlocks.forEach((_, extractionBlockId) => {
-      // Check if this weak block is on the current page
-      const extractionBlock = currentPageBlocks.find(b => b.id === extractionBlockId);
-      if (extractionBlock) {
-        // Find the corresponding DocumentCanvas block ID from our mapping
-        const canvasBlockId = Array.from(blockMappingRef.current.entries())
-          .find(([_, exId]) => exId === extractionBlockId)?.[0];
-        
-        if (canvasBlockId) {
-          ids.add(canvasBlockId);
-        }
-      }
+    // weakBlocks keys are now DocumentCanvas IDs (e.g., "block-1-5")
+    weakBlocks.forEach((_, blockId) => {
+      ids.add(blockId);
     });
     
     return ids;
-  }, [weakBlocks, extractionResult.blocks, currentPage]);
+  }, [weakBlocks]);
 
   // FIX #3: Error handler
   const handleError = useCallback((error: Error, context: 'load' | 'save' | 'render') => {
@@ -348,6 +319,7 @@ const WordStyleEditor = memo(forwardRef<DocumentCanvasRef, WordStyleEditorProps>
           pageNumber={currentPage + 1}
           scale={scale}
           isLocked={isAnalyzing}
+          updatedBlocks={updatedBlocks} // CRITICAL FIX: Forward updatedBlocks to DocumentCanvas
           onBlocksExtracted={handleBlocksExtracted}
           onTextChange={handleTextChange}
           onBlockSave={handleBlockSave}
