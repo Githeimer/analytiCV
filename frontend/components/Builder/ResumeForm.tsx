@@ -1,13 +1,15 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import PersonalInfoForm from './PersonalInfoForm';
-import SummaryForm from './SummaryForm';
-import ExperienceForm from './ExperienceForm';
-import EducationForm from './EducationForm';
-import SkillsForm from './SkillsForm';
-import ProjectsForm from './ProjectsForm';
-import CertificationsForm from './CertificationsForm';
+import {
+  PersonalInfoForm,
+  SummaryForm,
+  ExperienceForm,
+  EducationForm,
+  SkillsForm,
+  ProjectsForm,
+  CertificationsForm,
+} from './forms';
 import TemplateSelector from './TemplateSelector';
 import { buildResume, downloadPDF } from '@/services/builderApi';
 import { processPersonalInfoForBackend } from '@/utils/socialLinks';

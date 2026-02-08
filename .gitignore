@@ -1,6 +1,10 @@
 # --- Global ---
 .DS_Store
 .env
+.env.local
+*.log
+logs/
+*.tmp
 
 # --- Frontend (Node/React) ---
 node_modules/
@@ -18,3 +22,21 @@ __pycache__/
 venv/
 .venv/
 env/
+*.so
+*.egg
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+resume_db/
+
+# Test/temp files
+backend/*.pdf
+backend/sample_resume.html
+backend/test_text.txt
+backend/text_analyzer.py

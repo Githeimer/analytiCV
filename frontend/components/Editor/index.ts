@@ -7,6 +7,5 @@
 export { default as DocumentCanvas } from './DocumentCanvas';
 export { default as WordStyleEditor } from './WordStyleEditor';
 export { default as PDFRenderer } from './PDFRenderer';
-export { default as SuggestionPopover } from './SuggestionPopover';
-export { default as AISuggestionTooltip } from './AISuggestionTooltip';
+export { AISuggestionTooltip, SuggestionPopover } from './AISuggestion';
 export { default as EditableTextLayer } from './EditableTextLayer';
