@@ -7,6 +7,7 @@
  * - Tracks "dirty" state for unsaved changes
  * - Compares timestamps to determine if localStorage version is newer
  * - Provides recovery from browser refresh
+ * - CRITICAL FIX: Added clearEditsFromStorage() to prevent stale edits on new uploads
  */
 
 import type { BlockUpdate } from '@/services/editorApi';
@@ -163,6 +164,18 @@ export function clearStoredEdits(): void {
   } catch (error) {
     console.error('[EditorStorage] Failed to clear edits:', error);
   }
+}
+
+/**
+ * CRITICAL FIX: Clear all edits from localStorage
+ * Called when uploading a new PDF to prevent stale edits
+ * 
+ * This is an alias for clearStoredEdits() to match the naming convention
+ * used in the fixed editorApi.ts file
+ */
+export function clearEditsFromStorage(): void {
+  clearStoredEdits();
+  console.log('[EditorStorage] ✅ Cleared all edits from localStorage (new PDF upload)');
 }
 
 /**

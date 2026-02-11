@@ -1,17 +1,17 @@
 /**
  * API service for the PDF inline editor - FIXED VERSION
  * 
- * CRITICAL FIX: analyzeBlocks now merges saved edits before analysis
- * - This ensures the backend analyzes the CURRENT state, not the original PDF
- * - Prevents UI reversion after clicking "Analyze"
+ * CRITICAL FIX: Properly handles new PDF uploads vs resuming editing sessions
+ * - New uploads: Clear all cached edits, use fresh PDF content
+ * - Resume editing: Merge saved edits with blocks
+ * - Prevents stale edits from contaminating new PDF uploads
  * 
  * Key Improvements:
- * - Merges saved edits when extracting PDF blocks
- * - Merges saved edits BEFORE sending to analyze endpoint
+ * - Clears localStorage on new PDF upload
+ * - Only fetches saved edits when explicitly resuming
  * - Better error handling with retry logic
  * - Request deduplication to prevent duplicate saves
  * - Proper timeout handling
- * - LocalStorage sync for offline recovery
  */
 
 import type {
@@ -24,6 +24,7 @@ import {
   markEditsSynced,
   getEditsForPdf,
   getStoredEdits,
+  clearEditsFromStorage,
 } from '@/utils/editorStorage';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -37,13 +38,18 @@ const log = (...args: unknown[]) => {
 
 /**
  * Extract text blocks with coordinates from a PDF file
- * IMPORTANT: This now merges saved edits with the extracted blocks
- * Priority: localStorage (dirty) > backend > original
+ * 
+ * CRITICAL FIX: This is for NEW uploads only - does NOT merge saved edits
+ * For resuming editing sessions, use resumeEditingSession() instead
  */
 export async function extractPDFBlocks(file: File): Promise<PDFExtractionResult> {
-  log('Extracting PDF blocks from:', file.name);
+  log('🆕 NEW PDF UPLOAD - Extracting blocks from:', file.name);
   
-  // Step 1: Extract original blocks from PDF
+  // CRITICAL: Clear ALL cached edits when uploading a new PDF
+  log('Clearing localStorage for new upload...');
+  clearEditsFromStorage();
+  
+  // Extract original blocks from PDF
   const formData = new FormData();
   formData.append('file', file);
 
@@ -63,11 +69,22 @@ export async function extractPDFBlocks(file: File): Promise<PDFExtractionResult>
     throw new Error('PDF extraction failed');
   }
 
-  // Step 2: Check localStorage for dirty edits first (survives page refresh)
+  log(`✅ Extracted ${result.data.blocks.length} blocks from NEW PDF (no edits applied)`);
+  return result.data;
+}
+
+/**
+ * Resume an editing session with saved edits
+ * Use this when the user wants to continue editing after a page refresh
+ */
+export async function resumeEditingSession(blocks: TextBlock[], pdfName: string): Promise<TextBlock[]> {
+  log('📝 Resuming editing session for:', pdfName);
+  
+  // Priority 1: localStorage (dirty, unsaved edits)
   const storedEdits = getStoredEdits();
-  if (storedEdits && storedEdits.pdfName === file.name && storedEdits.isDirty) {
-    log('Found dirty localStorage edits, applying...');
-    result.data.blocks = result.data.blocks.map((block: TextBlock) => {
+  if (storedEdits && storedEdits.pdfName === pdfName && storedEdits.isDirty) {
+    log(`Found ${Object.keys(storedEdits.edits).length} dirty localStorage edits`);
+    const mergedBlocks = blocks.map(block => {
       if (storedEdits.edits[block.id]) {
         log(`  Applying localStorage edit to block ${block.id}`);
         return {
@@ -77,13 +94,13 @@ export async function extractPDFBlocks(file: File): Promise<PDFExtractionResult>
       }
       return block;
     });
-    log(`Applied ${Object.keys(storedEdits.edits).length} localStorage edits`);
-    return result.data;
+    log(`✅ Applied ${Object.keys(storedEdits.edits).length} localStorage edits`);
+    return mergedBlocks;
   }
 
-  // Step 3: Fetch saved edits from backend (if any)
+  // Priority 2: Backend saved edits (synced)
   try {
-    log('Fetching saved edits for:', file.name);
+    log('Fetching saved edits from backend...');
     const editsResponse = await fetch(`${API_BASE_URL}/api/get-edits/current_resume`);
     
     if (editsResponse.ok) {
@@ -91,85 +108,32 @@ export async function extractPDFBlocks(file: File): Promise<PDFExtractionResult>
       const savedEdits = editsData.edits || {};
       
       if (Object.keys(savedEdits).length > 0) {
-        log(`Found ${Object.keys(savedEdits).length} saved edits, merging...`);
+        log(`Found ${Object.keys(savedEdits).length} saved edits from backend`);
         
-        result.data.blocks = result.data.blocks.map((block: TextBlock) => {
+        const mergedBlocks = blocks.map(block => {
           if (savedEdits[block.id]) {
             log(`  Applying saved edit to block ${block.id}`);
             return {
               ...block,
-              text: savedEdits[block.id]
+              text: savedEdits[block.id].text || savedEdits[block.id],
             };
           }
           return block;
         });
         
         log(`✅ Successfully merged ${Object.keys(savedEdits).length} saved edits`);
-      } else {
-        log('No saved edits found');
-      }
-    }
-  } catch (err) {
-    log('⚠️ Could not load saved edits (continuing with original text):', err);
-  }
-
-  return result.data;
-}
-
-/**
- * CRITICAL FIX: Merge saved edits into blocks before analysis
- * This ensures the backend analyzes the CURRENT state, not the original PDF
- */
-async function mergeCurrentEditsIntoBlocks(blocks: TextBlock[]): Promise<TextBlock[]> {
-  log('Merging current edits into blocks before analysis...');
-  
-  // Priority 1: localStorage (dirty, unsaved edits)
-  const storedEdits = getStoredEdits();
-  if (storedEdits && storedEdits.isDirty && Object.keys(storedEdits.edits).length > 0) {
-    log(`Found ${Object.keys(storedEdits.edits).length} dirty localStorage edits`);
-    const mergedBlocks = blocks.map(block => {
-      if (storedEdits.edits[block.id]) {
-        log(`  Applying localStorage edit to block ${block.id}: "${block.text}" -> "${storedEdits.edits[block.id]}"`);
-        return {
-          ...block,
-          text: storedEdits.edits[block.id],
-        };
-      }
-      return block;
-    });
-    log('✅ Merged localStorage edits into blocks for analysis');
-    return mergedBlocks;
-  }
-
-  // Priority 2: Backend saved edits (synced)
-  try {
-    const editsResponse = await fetch(`${API_BASE_URL}/api/get-edits/current_resume`);
-    if (editsResponse.ok) {
-      const editsData = await editsResponse.json();
-      const savedEdits = editsData.edits || {};
-      
-      if (Object.keys(savedEdits).length > 0) {
-        log(`Found ${Object.keys(savedEdits).length} backend saved edits`);
-        const mergedBlocks = blocks.map(block => {
-          if (savedEdits[block.id]) {
-            log(`  Applying backend edit to block ${block.id}: "${block.text}" -> "${savedEdits[block.id]}"`);
-            return {
-              ...block,
-              text: savedEdits[block.id],
-            };
-          }
-          return block;
-        });
-        log('✅ Merged backend edits into blocks for analysis');
         return mergedBlocks;
+      } else {
+        log('No saved edits found in backend');
       }
+    } else {
+      log('Backend returned no saved edits');
     }
   } catch (err) {
-    log('⚠️ Could not fetch saved edits for analysis merge:', err);
+    log('⚠️ Could not load saved edits from backend:', err);
   }
 
-  // Priority 3: Original blocks (no edits found)
-  log('No saved edits found, using original blocks for analysis');
+  log('No saved edits found, returning original blocks');
   return blocks;
 }
 
@@ -466,4 +430,30 @@ export async function getSavedEdits(pdfName: string = 'current_resume'): Promise
     log('Failed to get saved edits:', err);
   }
   return {};
+}
+
+/**
+ * Clear all edits from backend and localStorage
+ * Use when starting fresh with a new PDF
+ */
+export async function clearAllEdits(): Promise<void> {
+  log('🗑️ Clearing all edits from backend and localStorage...');
+  
+  // Clear localStorage
+  clearEditsFromStorage();
+  
+  // Clear backend
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/clear-edits`, {
+      method: 'DELETE',
+    });
+    
+    if (response.ok) {
+      log('Successfully cleared backend edits');
+    } else {
+      log('⚠️ Failed to clear backend edits, but localStorage is cleared');
+    }
+  } catch (err) {
+    log('⚠️ Error clearing backend edits:', err);
+  }
 }

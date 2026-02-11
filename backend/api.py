@@ -114,6 +114,9 @@ async def extract_pdf_blocks(file: UploadFile = File(...)):
     """
     Extract text blocks with coordinates from a PDF for inline editing.
     Returns block positions, dimensions, and content for overlay placement.
+    
+    CRITICAL FIX: Clears the saved state when a new PDF is uploaded.
+    This prevents stale edits from persisting across different PDF uploads.
     """
     # Validate file extension
     if not file.filename or not file.filename.lower().endswith('.pdf'):
@@ -161,6 +164,11 @@ async def extract_pdf_blocks(file: UploadFile = File(...)):
                 status_code=400,
                 detail="Uploaded PDF does not appear to be a resume. Please upload a document containing experience, education, or skills sections."
             )
+        
+        # CRITICAL FIX: Clear saved state when new PDF is uploaded
+        # This prevents old edits from affecting the new PDF
+        clear_resume_state()
+        print(f"[api.py] Cleared resume state for new PDF upload")
         
         # Extract blocks with coordinates
         extraction_result = pdf_extractor.extract_for_editing(temp_path)
@@ -210,30 +218,28 @@ async def analyze_blocks(request: AnalyzeBlocksRequest):
     Analyze resume blocks and return UUIDs of weak blocks with suggestions.
     Uses AI to identify areas for improvement.
     
-    CRITICAL: Uses the persisted state from update-resume endpoint.
-    This ensures analysis reflects the SAVED text (e.g., '2025') not original PDF text ('2024').
+    CRITICAL FIXES:
+    1. Analyzes INCOMING blocks as-is (no state merging)
+    2. Deduplicates blocks by ID to prevent duplicate issues
     """
     try:
         weak_blocks = []
         
-        # CRITICAL: Merge incoming blocks with saved state
-        # Priority: _resume_state (saved) > request.blocks (frontend)
-        # This ensures we analyze the LATEST saved version
-        blocks_to_analyze = []
+        # FIX 1: Use incoming blocks directly - DO NOT merge with saved state
+        # This ensures we analyze the actual uploaded PDF content, not old edits
+        
+        # FIX 2: Deduplicate blocks by ID to prevent duplicate issues
+        seen_block_ids = set()
+        unique_blocks = []
         for block in request.blocks:
             block_id = block.get('id')
-            
-            # Check if we have a saved version of this block
-            if block_id in _resume_state:
-                saved = _resume_state[block_id]
-                blocks_to_analyze.append({
-                    'id': block_id,
-                    'text': saved.get('text', block.get('text', '')),
-                    'block_type': block.get('block_type', ''),
-                    'section': saved.get('section', block.get('section', ''))
-                })
-            else:
-                blocks_to_analyze.append(block)
+            if block_id and block_id not in seen_block_ids:
+                seen_block_ids.add(block_id)
+                unique_blocks.append(block)
+        
+        print(f"[api.py] Received {len(request.blocks)} blocks, {len(unique_blocks)} unique after dedup")
+        
+        blocks_to_analyze = unique_blocks
         
         for block in blocks_to_analyze:
             block_id = block.get('id')
@@ -248,21 +254,25 @@ async def analyze_blocks(request: AnalyzeBlocksRequest):
             weakness = analyze_block_content(text, section, block_type, request.job_description)
             
             if weakness:
-                weak_blocks.append({
-                    'id': block_id,
-                    'section': section,  # Include section for UI display
-                    'issue': weakness['issue'],
-                    'suggestion': weakness['suggestion'],
-                    'severity': weakness['severity'],
-                    'improved_text': weakness.get('improved_text', '')
-                })
+                # FIX 3: Double-check we haven't already added this block ID
+                if not any(wb['id'] == block_id for wb in weak_blocks):
+                    weak_blocks.append({
+                        'id': block_id,
+                        'section': section,  # Include section for UI display
+                        'issue': weakness['issue'],
+                        'suggestion': weakness['suggestion'],
+                        'severity': weakness['severity'],
+                        'improved_text': weakness.get('improved_text', '')
+                    })
         
-        # Calculate unified ATS score using the merged blocks (reflects saved state)
+        # Calculate unified ATS score using the incoming blocks (fresh upload)
         blocks_for_scoring = [
             {'text': block.get('text', ''), 'section': block.get('section', '')}
             for block in blocks_to_analyze
         ]
         ats_details = calculate_unified_ats_score(blocks_for_scoring)
+        
+        print(f"[api.py] Analysis complete: {len(blocks_to_analyze)} blocks analyzed, {len(weak_blocks)} unique issues found")
         
         return JSONResponse(content={
             "success": True,
@@ -531,6 +541,26 @@ def save_resume_state() -> bool:
         return False
 
 
+def clear_resume_state() -> bool:
+    """
+    Clear all saved resume state from memory and disk.
+    Called when a new PDF is uploaded to prevent stale edits.
+    """
+    global _resume_state
+    _resume_state = {}
+    
+    # Also delete the file if it exists
+    if RESUME_DATA_FILE.exists():
+        try:
+            RESUME_DATA_FILE.unlink()
+            print(f"[api.py] Cleared resume state file")
+            return True
+        except Exception as e:
+            print(f"[api.py] Failed to delete resume state file: {e}")
+            return False
+    return True
+
+
 # Load existing state on startup
 load_resume_state()
 
@@ -782,7 +812,8 @@ async def update_resume(request: UpdateResumeRequest):
     Update resume block text and persist changes to disk.
     Returns success status and recalculated ATS score with detailed breakdown.
     
-    CRITICAL: Uses the SAME scoring logic as the Analyzer for consistency.
+    This endpoint is used by the EDITOR to save user edits.
+    The saved state persists until a NEW PDF is uploaded.
     """
     try:
         updated_block_ids = []
@@ -805,7 +836,7 @@ async def update_resume(request: UpdateResumeRequest):
             
             updated_block_ids.append(block_id)
         
-        # CRITICAL: Persist to disk so changes survive refresh/restart
+        # Persist to disk so changes survive refresh (but NOT new PDF uploads)
         if not save_resume_state():
             raise Exception("Failed to persist changes to disk")
         
@@ -841,6 +872,55 @@ async def update_resume(request: UpdateResumeRequest):
             status_code=500,
             detail=f"Failed to update resume: {str(e)}"
         )
+
+
+@app.get("/api/get-edits/{resume_id}")
+async def get_edits(resume_id: str):
+    """
+    Get saved edits for a specific resume.
+    Returns empty if no edits exist (e.g., after new upload cleared state).
+    
+    CRITICAL: After a new PDF upload, this will return empty edits
+    because clear_resume_state() was called.
+    """
+    try:
+        # If resume state is empty (e.g., after new upload), return no edits
+        if not _resume_state:
+            print(f"[api.py] No saved edits found for {resume_id} (state is empty)")
+            return JSONResponse(content={
+                "success": True,
+                "edits": {},
+                "message": "No saved edits found"
+            })
+        
+        print(f"[api.py] Returning {len(_resume_state)} saved edits for {resume_id}")
+        
+        # Return current state
+        return JSONResponse(content={
+            "success": True,
+            "edits": _resume_state,
+            "resumeId": resume_id
+        })
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching edits: {str(e)}")
+
+
+@app.delete("/api/clear-edits")
+async def clear_edits():
+    """
+    Manually clear all saved edits.
+    Useful for testing or giving users a "reset" button.
+    """
+    try:
+        clear_resume_state()
+        print(f"[api.py] Manually cleared all edits")
+        return JSONResponse(content={
+            "success": True,
+            "message": "All edits cleared successfully"
+        })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error clearing edits: {str(e)}")
 
 
 @app.post("/api/generate-pdf")

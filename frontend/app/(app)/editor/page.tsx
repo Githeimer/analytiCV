@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import dynamic from 'next/dynamic';
 import { useEditorState } from '@/hooks/useEditorState';
@@ -45,7 +45,7 @@ function EditorLoadingSkeleton() {
 
 import { extractPDFBlocks, analyzeBlocks, updateResumeBlocks } from '@/services/editorApi';
 import type { BlockUpdate, ATSScoreDetails } from '@/services/editorApi';
-import type { EditableBlockState, TextBlock, SectionType } from '@/types/editor';
+import type { EditableBlockState, TextBlock, SectionType, BlockWeakness } from '@/types/editor';
 import { exportToPDF, downloadPDF, fileToArrayBuffer } from '@/utils/pdfExport';
 import type { DocumentCanvasRef } from '@/components/Editor/WordStyleEditor';
 
@@ -150,7 +150,6 @@ export default function EditorPage() {
 
     try {
       // STEP 1: Force save any pending changes FIRST
-      // This ensures the backend has the latest text (e.g., '2025' not '2024')
       console.log('[EditorPage] Step 1: Checking for pending changes...');
       if (hasPendingChanges) {
         console.log('[EditorPage] Pending changes detected, saving before analysis...');
@@ -171,40 +170,33 @@ export default function EditorPage() {
         const newMap = new Map(currentBlocks.map(b => [b.id, b.text]));
         setSavedBlocksMap(newMap);
         
-        // CRITICAL: Wait for the backend to finish processing the save
-        // Give it a moment to ensure the saved state is fully committed
+        // Wait for backend to process
         await new Promise(resolve => setTimeout(resolve, 500));
       } else {
         console.log('[EditorPage] No pending changes, proceeding with analysis...');
       }
 
-      // STEP 2: Get CURRENT blocks from DocumentCanvas (not stale state)
-      // These are the actual edited blocks with their current text
+      // STEP 2: Get CURRENT blocks from DocumentCanvas
       console.log('[EditorPage] Step 2: Getting current blocks from DocumentCanvas...');
       const currentBlocks = editorRef.current.getCurrentBlocks();
       console.log('[EditorPage] Current blocks count:', currentBlocks.length);
       
-      // Build a section lookup from extraction result's sections map
-      // This gives us accurate section info from PyMuPDF's analysis
+      // Build section lookup
       const sectionLookup = new Map<string, string>();
       if (state.extractionResult?.sections) {
         Object.entries(state.extractionResult.sections).forEach(([sectionName, blocks]) => {
           blocks.forEach(block => {
-            // Store section by original text (normalized) for fuzzy matching
             const normalizedText = block.text.trim().toLowerCase().substring(0, 100);
             sectionLookup.set(normalizedText, sectionName);
           });
         });
       }
       
-      // Convert DocumentCanvas blocks to the format expected by analyzeBlocks
-      // Use current edited text from DocumentCanvas, but section info from extraction result
+      // Convert blocks for analysis
       const blocksForAnalysis = currentBlocks.map(cb => {
-        // Try to find section by matching text content
         const normalizedText = cb.text.trim().toLowerCase().substring(0, 100);
         let section = sectionLookup.get(normalizedText);
         
-        // If no exact match, try to find by partial match
         if (!section) {
           for (const [key, sec] of sectionLookup.entries()) {
             if (normalizedText.includes(key.substring(0, 50)) || key.includes(normalizedText.substring(0, 50))) {
@@ -214,7 +206,6 @@ export default function EditorPage() {
           }
         }
         
-        // Use DocumentCanvas section guess as fallback
         section = section || cb.section || 'other';
         
         return {
@@ -229,17 +220,27 @@ export default function EditorPage() {
       console.log('[EditorPage] Sections found:', [...new Set(blocksForAnalysis.map(b => b.section))].join(', '));
       
       console.log('[EditorPage] Step 3: Sending blocks to backend for analysis...');
-      console.log('[EditorPage] Sample block texts:', blocksForAnalysis.slice(0, 3).map(b => b.text));
       
       // STEP 3: Send to backend for analysis
-      // The editorApi.analyzeBlocks() function will merge saved edits from backend
       const result = await analyzeBlocks(blocksForAnalysis);
       
-      console.log('[EditorPage] Step 4: Analysis complete, updating UI...');
+      console.log('[EditorPage] Step 4: Analysis complete, received result:', result);
+      console.log('[EditorPage] weak_blocks count from backend:', result.weak_blocks?.length);
       
-      // STEP 4: Update ONLY analysis state - do NOT re-initialize PDF renderer
-      // This prevents the UI from reverting to the original PDF
-      setWeakBlocks(result.weak_blocks);
+      // CRITICAL FIX: Deduplicate weak_blocks by block ID before setting state
+      const uniqueWeakBlocks = result.weak_blocks.reduce((acc, issue) => {
+        // Only add if we haven't seen this block ID yet
+        if (!acc.find(existing => existing.id === issue.id)) {
+          acc.push(issue);
+        }
+        return acc;
+      }, [] as typeof result.weak_blocks);
+      
+      console.log('[EditorPage] After deduplication:', uniqueWeakBlocks.length, 'unique issues');
+      console.log('[EditorPage] Deduplicated issue IDs:', uniqueWeakBlocks.map(w => w.id));
+      
+      // STEP 4: Update analysis state with deduplicated issues
+      setWeakBlocks(uniqueWeakBlocks);
       
       if (result.ats_score !== undefined) {
         setAtsScore(result.ats_score);
@@ -285,24 +286,20 @@ export default function EditorPage() {
     setError(null);
 
     try {
-      // Get current blocks from DocumentCanvas - these have the edited text already
+      // Get current blocks from DocumentCanvas
       const currentBlocks = editorRef.current.getCurrentBlocks();
       
-      // Filter to only edited blocks and convert to TextBlock format for pdfExport
       const editedBlocks: TextBlock[] = [];
       const exportBlockStates = new Map<string, EditableBlockState>();
       
-      // Parse page number from block ID (format: "block-{pageNumber}-{index}")
-      // pageNumber in DocumentCanvas is 1-indexed (PDF.js), but pdfExport expects 0-indexed
       const getPageFromBlockId = (blockId: string): number => {
         const parts = blockId.split('-');
         const pdfJsPageNum = parts.length >= 2 ? parseInt(parts[1], 10) : 1;
-        return pdfJsPageNum - 1; // Convert to 0-indexed for pdf-lib
+        return pdfJsPageNum - 1;
       };
       
       currentBlocks.forEach(cb => {
         if (cb.isEdited) {
-          // Convert ResumeBlock to TextBlock format expected by pdfExport
           const textBlock: TextBlock = {
             id: cb.id,
             text: cb.text,
@@ -319,11 +316,10 @@ export default function EditorPage() {
           
           editedBlocks.push(textBlock);
           
-          // Create block state with isDirty = true for edited blocks
           exportBlockStates.set(cb.id, {
             id: cb.id,
             currentText: cb.text,
-            originalText: '', // We don't need original text since isDirty is true
+            originalText: '',
             isEditing: false,
             isDirty: true,
             weakness: null,
@@ -335,7 +331,6 @@ export default function EditorPage() {
       
       if (editedBlocks.length === 0) {
         console.log('[Export] No edits to export, downloading original PDF');
-        // If no edits, just download the original
         const blob = new Blob([pdfBytesRef.current], { type: 'application/pdf' });
         const filename = state.pdfFile?.name || 'resume.pdf';
         downloadPDF(blob, filename);
@@ -349,7 +344,7 @@ export default function EditorPage() {
 
       const blob = await exportToPDF({
         originalPdfBytes: pdfBytesRef.current,
-        blocks: editedBlocks,  // Only edited blocks, with correct coordinates
+        blocks: editedBlocks,
         blockStates: exportBlockStates,
         filename: state.pdfFile?.name || 'resume.pdf',
       });
@@ -363,25 +358,21 @@ export default function EditorPage() {
     }
   }, [state.extractionResult, state.blocks, state.pdfFile, setExporting, hasPendingChanges]);
 
-  // Handle block text change - UPDATE LOCAL STATE ONLY, no backend call
+  // Handle block text change
   const handleBlockTextChange = useCallback(
     (id: string, oldText: string, newText: string) => {
-      // Just update local state - don't trigger analysis or backend saves
       updateBlockText(id, newText);
     },
     [updateBlockText]
   );
 
-  // Handle block save - persist to backend and update ATS score
-  // This is called by DocumentCanvas when user finishes editing (blur/Enter key)
+  // Handle block save
   const handleBlockSave = useCallback(async (update: BlockUpdate): Promise<void> => {
     console.log('[EditorPage] handleBlockSave called with:', update);
     
     try {
-      // Use the DocumentCanvas block ID directly
-      // The backend will store edits by this ID consistently
       const backendUpdate: BlockUpdate = {
-        blockId: update.blockId,  // Use DocumentCanvas ID as-is
+        blockId: update.blockId,
         oldText: update.oldText,
         newText: update.newText,
         section: update.section || undefined,
@@ -389,12 +380,10 @@ export default function EditorPage() {
 
       console.log('[EditorPage] Sending to backend:', backendUpdate);
 
-      // Call the backend API to persist the change
       const response = await updateResumeBlocks([backendUpdate]);
       
       console.log('[EditorPage] Backend response:', response);
       
-      // Update ATS score from unified backend calculation
       if (response.atsScore !== undefined) {
         setAtsScore(response.atsScore);
       }
@@ -402,17 +391,14 @@ export default function EditorPage() {
         setAtsScoreDetails(response.atsScoreDetails);
       }
       
-      // Update last save time
       setLastSaveTime(new Date());
       
-      // Update saved blocks map
       if (editorRef.current) {
         const currentBlocks = editorRef.current.getCurrentBlocks();
         const newMap = new Map(currentBlocks.map(b => [b.id, b.text]));
         setSavedBlocksMap(newMap);
       }
     } catch (error) {
-      // Re-throw to let DocumentCanvas handle the error state
       console.error('[EditorPage] Failed to save block:', error);
       throw error;
     }
@@ -426,25 +412,20 @@ export default function EditorPage() {
     [selectBlock]
   );
 
-  // Handle clicking an issue in sidebar - scroll to block, highlight, and focus for editing
+  // Handle clicking an issue in sidebar
   const handleIssueClick = useCallback((blockId: string) => {
     setSelectedIssueId(blockId);
     selectBlock(blockId);
     
-    // Find the editable span by block ID using data attribute
     const blockElement = document.querySelector(`[data-block-id="${blockId}"]`) as HTMLElement;
     if (blockElement) {
-      // Scroll to the element smoothly, centering it in view
       blockElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
       
-      // Add temporary highlight animation
       blockElement.classList.add('issue-highlight-animation');
       
-      // Focus the element after scroll completes
       setTimeout(() => {
         if (blockElement.contentEditable === 'true') {
           blockElement.focus();
-          // Place cursor at end of text for natural editing
           const range = document.createRange();
           const selection = window.getSelection();
           range.selectNodeContents(blockElement);
@@ -453,7 +434,6 @@ export default function EditorPage() {
           selection?.addRange(range);
         }
         
-        // Remove the highlight animation class after it completes
         setTimeout(() => {
           blockElement.classList.remove('issue-highlight-animation');
         }, 1500);
@@ -461,26 +441,23 @@ export default function EditorPage() {
     }
   }, [selectBlock]);
 
-  // Check for PDF from analyzer page (via sessionStorage)
+  // Check for PDF from analyzer page
   useEffect(() => {
     const loadFromAnalyzer = async () => {
       const pdfData = sessionStorage.getItem('analyzerPdfData');
       const pdfName = sessionStorage.getItem('analyzerPdfName');
       
       if (pdfData && pdfName) {
-        // Clear the sessionStorage data after reading
         sessionStorage.removeItem('analyzerPdfData');
         sessionStorage.removeItem('analyzerPdfName');
         
         try {
           setIsUploading(true);
           
-          // Convert base64 back to File
           const response = await fetch(pdfData);
           const blob = await response.blob();
           const file = new File([blob], pdfName, { type: 'application/pdf' });
           
-          // Process the file
           pdfBytesRef.current = await fileToArrayBuffer(file);
           const url = URL.createObjectURL(file);
           setPdf(file, url);
@@ -519,11 +496,28 @@ export default function EditorPage() {
     fileInputRef.current?.click();
   }, []);
 
-  // Get weak blocks as array for sidebar
-  const weakBlocksArray = Array.from(state.weakBlocks.entries()).map(([blockId, weakness]) => ({
-    blockId,
-    ...weakness,
-  }));
+  // CRITICAL FIX: Get weak blocks as array and deduplicate by ID
+  const weakBlocksArray = useMemo(() => {
+    const entries = Array.from(state.weakBlocks.entries()).map(([blockId, weakness]) => ({
+      ...weakness,
+    }));
+    
+    // Deduplicate by block ID
+    const seen = new Set<string>();
+    const unique: BlockWeakness[] = [];
+    
+    for (const entry of entries) {
+      if (!seen.has(entry.id)) {
+        seen.add(entry.id);
+        unique.push(entry);
+      }
+    }
+    
+    return unique;
+  }, [state.weakBlocks]);
+
+  console.log('[EditorPage] Rendering issues list with', weakBlocksArray.length, 'unique issues');
+  console.log('[EditorPage] Issue IDs:', weakBlocksArray.map(w => w.id));
 
   // Get section stats
   const sectionStats = state.extractionResult?.sections
@@ -766,7 +760,7 @@ export default function EditorPage() {
                 </div>
 
                 <div className="p-4 space-y-4">
-                  {/* ATS Score Display - Now shows unified score from backend */}
+                  {/* ATS Score Display */}
                   {atsScore !== null && (
                     <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border border-blue-100 overflow-hidden">
                       <div className="flex items-center justify-between p-3">
@@ -807,8 +801,8 @@ export default function EditorPage() {
                   {/* Stats */}
                   <div className="flex items-center justify-between text-sm p-3 bg-gray-50 rounded-lg">
                     <span className="text-gray-600">Issues found:</span>
-                    <span className={`font-bold text-lg ${weakBlockCount > 0 ? 'text-yellow-600' : 'text-green-600'}`}>
-                      {weakBlockCount}
+                    <span className={`font-bold text-lg ${weakBlocksArray.length > 0 ? 'text-yellow-600' : 'text-green-600'}`}>
+                      {weakBlocksArray.length}
                     </span>
                   </div>
 
@@ -913,7 +907,6 @@ export default function EditorPage() {
             {/* Document Canvas - Center */}
             <div className="flex-1 min-w-0">
               <div className="bg-gray-200 rounded-xl p-8 min-h-[800px] overflow-auto">
-                {/* Word Mode Editor - MS Word-style inline editing */}
                 <WordStyleEditor
                   ref={editorRef}
                   pdfUrl={state.pdfUrl}
@@ -938,9 +931,9 @@ export default function EditorPage() {
                     <svg className="w-4 h-4 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                     </svg>
-                    Issues ({weakBlockCount})
+                    Issues ({weakBlocksArray.length})
                   </h3>
-                  {weakBlockCount > 0 && (
+                  {weakBlocksArray.length > 0 && (
                     <p className="text-xs text-gray-500 mt-1">
                       Click "Analyze" after making edits to update
                     </p>
@@ -959,18 +952,17 @@ export default function EditorPage() {
                   ) : (
                     <div className="divide-y divide-gray-100">
                       {weakBlocksArray.map((issue) => {
-                        // Section is now included directly in the weak block response
                         const sectionName = issue.section || 'content';
                         return (
                           <div
-                            key={issue.blockId}
+                            key={issue.id}
                             ref={(el) => {
-                              if (el) issueRefs.current.set(issue.blockId, el);
+                              if (el) issueRefs.current.set(issue.id, el);
                             }}
-                            onClick={() => handleIssueClick(issue.blockId)}
+                            onClick={() => handleIssueClick(issue.id)}
                             className={`
                               p-4 cursor-pointer transition-colors
-                              ${selectedIssueId === issue.blockId ? 'bg-blue-50' : 'hover:bg-gray-50'}
+                              ${selectedIssueId === issue.id ? 'bg-blue-50' : 'hover:bg-gray-50'}
                             `}
                           >
                             <div className="flex items-start gap-3">
@@ -984,7 +976,7 @@ export default function EditorPage() {
                               />
                               <div className="flex-1 min-w-0">
                                 <p className="text-xs text-gray-500 capitalize mb-1">
-                                  {sectionName} section
+                                  {sectionName} Section
                                 </p>
                                 <p className="text-sm font-medium text-gray-900 mb-1">
                                   {issue.issue}
