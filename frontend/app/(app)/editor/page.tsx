@@ -227,10 +227,12 @@ export default function EditorPage() {
       console.log('[EditorPage] Step 4: Analysis complete, received result:', result);
       console.log('[EditorPage] weak_blocks count from backend:', result.weak_blocks?.length);
       
-      // CRITICAL FIX: Deduplicate weak_blocks by block ID before setting state
+      // CRITICAL FIX: Deduplicate weak_blocks by block ID and issue content before setting state
       const uniqueWeakBlocks = result.weak_blocks.reduce((acc, issue) => {
-        // Only add if we haven't seen this block ID yet
-        if (!acc.find(existing => existing.id === issue.id)) {
+        // Create a unique key combining block ID and issue content
+        const key = `${issue.id}:${issue.issue}:${issue.suggestion}`;
+        // Only add if we haven't seen this exact issue for this block yet
+        if (!acc.find(existing => `${existing.id}:${existing.issue}:${existing.suggestion}` === key)) {
           acc.push(issue);
         }
         return acc;
