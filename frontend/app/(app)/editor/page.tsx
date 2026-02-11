@@ -206,6 +206,19 @@ export default function EditorPage() {
           }
         }
         
+        // Special handling for skills section
+        if (!section && (normalizedText.includes('skill') || normalizedText.includes('technical'))) {
+          section = 'skills';
+        }
+        
+        // Additional check: if text contains common technical skills, classify as skills
+        if (!section) {
+          const skill_keywords = ['machine learning', 'computer vision', 'full-stack', 'algorithms', 'python', 'javascript', 'react', 'node', 'aws', 'docker', 'kubernetes'];
+          if (skill_keywords.some(keyword => normalizedText.includes(keyword))) {
+            section = 'skills';
+          }
+        }
+        
         section = section || cb.section || 'other';
         
         return {
