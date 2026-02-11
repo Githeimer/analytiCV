@@ -9,7 +9,7 @@ const Hero = () => {
           <span> Fill the Gaps.</span>
         </div>
         <div>
-            <Link className="font-comfortaa bg-(--theme-blue) text-white p-3 rounded-sm px-4 "  href={"/upload"}>upload your resume</Link>
+            <Link className="font-comfortaa bg-(--theme-blue) text-white p-3 rounded-sm px-4 "  href={"/analyzer"}>upload your resume</Link>
         </div>
     </div>
     <p className="font-roboto font-extralight pt-5">Know Your Weak Spots Before Recruiters Do with our AI powered Resume Analyzer and Builder. Don’t let a paper decide how capable your are.</p>
