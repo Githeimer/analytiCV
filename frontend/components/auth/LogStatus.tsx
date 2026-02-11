@@ -1,37 +1,18 @@
 "use client"
 import { useSession } from "next-auth/react"
-import { useEffect, useState } from "react";
-import Link from "next/link";
+import Link from "next/link"
+
 const LogStatus = () => {
-    const {data}= useSession();
-    const [logged,SetLogged]=useState<boolean>(false)
+  const { status } = useSession()
 
-    useEffect(()=>{
-        checkUser();
-    },[])
+  const logged = status === "authenticated"
 
-    function checkUser()
-    {
-        if(!data)
-        {
-            SetLogged(false);
-            return;
-        }
-        SetLogged(true);
-    }
-    return (
-    <Link href={`${!logged?"/login":"/profile"}`} className="rounded-sm bg-(--theme-blue) ml-3 px-4 py-0.5 text-white">
-     {!logged?
-            <div>
-                login
-            </div>
-        :
-        
-            <div>
-                profile
-            </div>
-         }
-       
+  return (
+    <Link
+      href={logged ? "/profile" : "/auth/login"}
+      className="rounded-sm bg-(--theme-blue) ml-3 px-4 py-0.5 text-white"
+    >
+      {logged ? "Profile" : "Login"}
     </Link>
   )
 }

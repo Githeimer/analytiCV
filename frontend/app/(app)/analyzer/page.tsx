@@ -3,6 +3,8 @@
 import { useState, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useSession } from 'next-auth/react';
+
 
 // TypeScript interfaces
 interface ATSBreakdownItem {
@@ -50,7 +52,10 @@ export default function AnalyzerPage() {
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const { data: session, status } = useSession();
+  const logged = status === "authenticated"; // true if user
 
+ 
   const handleUploadClick = useCallback(() => {
     fileInputRef.current?.click();
   }, []);
@@ -97,7 +102,24 @@ export default function AnalyzerPage() {
         body: formData,
       });
 
+      
       const data = await response.json();
+      if(status=="authenticated")
+      {
+         if (!session?.user?.email) return; // not logged in, skip
+
+            const res = await fetch(`/api/saveResume?email=${session.user.email}`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(data),
+            });
+
+            const result = await res.json();
+            console.log(result);
+      }
+
 
       if (!response.ok) {
         throw new Error(data.error || 'Failed to parse resume');

@@ -14,9 +14,7 @@ const Navbar = () => {
           <Link href="/builder">builder</Link>
           <Link href="/analyzer">analyzer</Link>
           <Link href="/editor">editor</Link>
-          <div>
-            features
-          </div>
+      
           <Link href={"/#about"}>about us</Link>
           <Link href={"https://github.com/githeimer/analyticv"}>github repo</Link>
           <LogStatus></LogStatus>
